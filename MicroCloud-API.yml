@@ -1,0 +1,36 @@
+openapi: 3.0.0
+info:
+  title: MicroCloud backend API
+  version: "0.1"
+servers:
+  - url: "http://localhost:8080"
+
+# The single API contract. The backend's interfaces (app.microteams.microcloud.api.*Api) and the
+# test frontend's client are both GENERATED from this file — neither side hand-writes a client.
+# The generator names an Api class after a path's first segment, so the path IS the structure.
+#
+# This is the stripped skeleton: only the minimal authenticated /ping endpoint exists, to prove the
+# frontend -> backend -> auth chain end to end. Real MicroCloud endpoints (tenants, customers,
+# accounts, machines, api-keys, billing, audit) are added here first, then implemented by the one
+# controller per path prefix.
+
+paths:
+  /ping:
+    get:
+      operationId: ping
+      summary: Authenticated health check (minimal example endpoint)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                required:
+                  - code
+                  - message
