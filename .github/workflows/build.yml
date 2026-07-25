@@ -1,0 +1,164 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  merge_group:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+# One workflow builds the backend, the test frontend, and the LXC template in parallel, lints the
+# scripts + template routines, packages everything into a deployment bundle, then proves the bundle
+# boots by bringing the docker-compose cluster up and waiting for every service to be healthy.
+
+jobs:
+  build-jar:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: "maven"
+          cache-dependency-path: backend/pom.xml
+          settings-path: ${{ github.workspace }}/backend
+
+      # Integration tests need a real Postgres with the "microcloud" schema.
+      - name: Start dependencies (Postgres)
+        run: ./scripts/dependency-start.sh
+
+      - name: Build with Maven (runs the integration tests)
+        run: ./mvnw install
+        env:
+          SPRING_APPLICATION_JSON: '{"spring.jpa.hibernate.ddl-auto":"update"}'
+
+      - name: Check uncommitted changes to ensure format applied
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            git status
+            echo "There are uncommitted changes. Please run './mvnw spotless:apply' and commit them."
+            exit 1
+          else
+            echo "No uncommitted changes."
+          fi
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar
+          path: backend/target/*.jar
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  lint-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck the shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck deploy/*.sh backend/scripts/*.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax-check the template routines (stdlib-only Python)
+        run: |
+          python -m py_compile templates/lxc/debian13/*.py
+          pip install pyflakes >/dev/null && python -m pyflakes templates/lxc/debian13/*.py
+
+  build-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zstd (tar --zstd needs the binary)
+        run: sudo apt-get update -qq && sudo apt-get install -y zstd
+      - name: Build the Debian 13 LXC template (the compile step for the template image)
+        # Downloads the standard Proxmox Debian 13 LXC template and customizes it in a chroot.
+        run: sudo python3 templates/lxc/debian13/build.py --output dist/debian13-microcloud.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lxc-template
+          path: dist/debian13-microcloud.tar.zst
+
+  package-zip:
+    needs: [build-jar, build-frontend, lint-scripts, build-template]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble the deployment bundle
+        run: |
+          set -euo pipefail
+          STAGE=microcloud-deploy
+          mkdir -p "$STAGE/backend" "$STAGE/frontend"
+          cp deploy/docker-compose.yml deploy/nginx.conf deploy/gen-env.sh deploy/README.md "$STAGE/"
+          cp -r deploy/init "$STAGE/"
+          cp artifacts/jar/*.jar "$STAGE/backend/backend.jar"
+          cp -r artifacts/frontend-dist/. "$STAGE/frontend/dist/"
+          # The LXC template is a core part of the system, so it ships in the bundle: the built
+          # template IMAGE + the init-machine.py startup routine. build.py (the compile step) does
+          # NOT ship — it produced the image. newapi is NOT bundled; compose pulls our public image
+          # ghcr.io/micro-teams/new-api at deploy time.
+          mkdir -p "$STAGE/templates/lxc/debian13"
+          cp artifacts/lxc-template/debian13-microcloud.tar.zst "$STAGE/templates/lxc/debian13/"
+          cp templates/lxc/debian13/init-machine.py "$STAGE/templates/lxc/debian13/"
+          chmod +x "$STAGE/gen-env.sh" "$STAGE/templates/lxc/debian13/init-machine.py"
+          echo "== bundle contents =="; find "$STAGE" -maxdepth 3 -type f | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: microcloud-deploy
+          path: microcloud-deploy
+
+  test-compose:
+    needs: [package-zip]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: microcloud-deploy
+          path: microcloud-deploy
+      - name: Bring the cluster up and wait for every service to be healthy
+        working-directory: microcloud-deploy
+        run: |
+          bash gen-env.sh
+          docker compose up -d --wait --wait-timeout 360
+      - name: Cluster status
+        if: always()
+        working-directory: microcloud-deploy
+        run: docker compose ps
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: microcloud-deploy
+        run: docker compose logs --no-color --tail 200
+      - name: Tear down
+        if: always()
+        working-directory: microcloud-deploy
+        run: docker compose down

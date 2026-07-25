@@ -1,0 +1,11 @@
+# apt packages baked into the Debian 13 template by build.py (one per line, '#' = comment).
+# Keep this the single place to declare what the template ships with.
+# Node.js is installed separately from NodeSource (Debian's npm pulls in a huge node-* tree).
+ca-certificates
+curl
+git
+sudo
+ufw
+openssh-server
+python3
+docker.io
