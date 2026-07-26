@@ -12,6 +12,11 @@ upstream service's users get real machines (today: Debian 13 LXC containers with
 over SSH on a private network), billed against prepaid fund accounts. It is multi-tenant: each
 upstream service is a **tenant**, and each tenant has its own end-users.
 
+In one line: MicroCloud is a **base service / IaaS control plane**, not traditional middleware — a
+self-contained, stateful, async service that upstreams call over REST to provision and bill machines,
+abstracting the physical compute provider behind a small logical surface (the provider-abstraction
+layer described below).
+
 ## The core idea: physical reality vs. logical abstractions
 
 MicroCloud deliberately splits its model into two layers.
