@@ -67,29 +67,44 @@ class TemplateService(
     private val templateUploader: TemplateUploader,
     private val config: MicroCloudConfig,
 ) {
-    /** Seed / upsert the configured template catalog by name on startup. */
+    /** Discover templates from the templates directory on startup (see syncFromDir). */
     @PostConstruct
     fun seedCatalog() {
-        config.templates.forEach { entry ->
-            val template =
-                templateRepository.findByName(entry.name).orElseGet {
-                    MachineTemplate(name = entry.name)
-                }
-            template.description = entry.description
-            template.source = entry.source
-            template.kind =
-                when (entry.kind.lowercase()) {
-                    "vm" -> MachineTemplateKind.VM
-                    else -> MachineTemplateKind.LXC
-                }
-            templateRepository.save(template)
-        }
+        syncFromDir()
+    }
+
+    /**
+     * Enumerate the templates directory and upsert a catalog entry per `*.tar.zst` image found: the
+     * template name is the image's parent directory, the kind is its grandparent (`lxc`/`vm`), and
+     * the source is the image's path (used when uploading it to a placement). So an operator just
+     * drops a template into the directory and it appears in the catalog — no config needed.
+     */
+    fun syncFromDir() {
+        val root = java.io.File(config.templatesDir)
+        if (!root.isDirectory) return
+        root
+            .walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".tar.zst") }
+            .forEach { image ->
+                val name = image.parentFile?.name ?: image.nameWithoutExtension
+                val kind =
+                    when (image.parentFile?.parentFile?.name?.lowercase()) {
+                        "vm" -> MachineTemplateKind.VM
+                        else -> MachineTemplateKind.LXC
+                    }
+                val template =
+                    templateRepository.findByName(name).orElseGet { MachineTemplate(name = name) }
+                template.kind = kind
+                template.source = image.absolutePath
+                templateRepository.save(template)
+            }
     }
 
     fun getTemplate(id: IdType): MachineTemplate =
         templateRepository.findById(id).orElseThrow { NotFoundError("machine-template", id) }
 
     fun listTemplates(pageStart: IdType?, pageSize: Int): Pair<List<MachineTemplateDTO>, PageDTO> {
+        syncFromDir() // reflect any templates added to the directory since startup
         val all = templateRepository.findAll().sortedBy { it.id }
         val (page, info) = PageHelper.pageFromAll(all, pageStart, pageSize, { it.id!! }, null)
         return page.map { it.toDTO() } to info

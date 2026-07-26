@@ -93,9 +93,14 @@ the **public** image `ghcr.io/micro-teams/new-api:v1.0.0-rc.21`, which compose p
 (no registry credentials needed). It stores state under `app_data/newapi/`. Configure its upstream
 channels + admin token on first boot (see `tech/microcloud/04-newapi-relay.md` in the team docs).
 
-## The LXC template
+## Templates
 
-`templates/lxc/debian13/debian13-microcloud.tar.zst` is our Debian 13 + Claude Code LXC template,
-built in CI by `build.py` and shipped here because it is core to provisioning. Upload it to Proxmox
-(`pveam`/storage) so the backend can create containers from it; `init-machine.py` (also here) is run
-on each new container to initialize it.
+The `templates/` directory is mounted into the backend (`/templates`), which **enumerates it** to
+build the template catalog: each `*.tar.zst` image is a template named after its parent directory,
+with the kind from its grandparent (`lxc` / `vm`). So the shipped
+`templates/lxc/debian13/debian13-microcloud.tar.zst` appears as template `debian13` automatically —
+and dropping another image into the directory adds it, no config. `init-machine.py` (also here) is
+baked into the image and run on each new container to initialize it.
+
+From the console/API, a super-admin then **uploads** a template to a placement (the image is copied
+onto that placement's Proxmox storage) before machines can be created there from it.
