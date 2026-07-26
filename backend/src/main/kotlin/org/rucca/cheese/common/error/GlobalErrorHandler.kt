@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.ControllerAdvice
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.ResponseBody
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
+import org.springframework.web.servlet.NoHandlerFoundException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 
 @ControllerAdvice
 class GlobalErrorHandler {
@@ -96,6 +98,18 @@ class GlobalErrorHandler {
             )
     }
 
+    // An unknown request path (no controller matches) — a client mistake, not a server error. Map
+    // it to a clean 404 instead of letting it fall into the 500 "Unexpected error" branch, and log
+    // it at WARN without a stack trace so bad paths don't pollute the logs.
+    @ExceptionHandler(NoResourceFoundException::class, NoHandlerFoundException::class)
+    @ResponseBody
+    @NoAuth
+    fun handleNoHandlerFound(e: Exception): ResponseEntity<BaseError> {
+        logger.warn("No handler for request: {}", e.message)
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(RouteNotFoundError(e.message ?: "not found"))
+    }
+
     @ExceptionHandler(Exception::class)
     @ResponseBody
     fun handleException(e: Exception): ResponseEntity<BaseError> {
@@ -103,3 +117,6 @@ class GlobalErrorHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(InternalServerError())
     }
 }
+
+/** No controller matched the request path — returned as a 404 rather than a 500. */
+class RouteNotFoundError(message: String) : BaseError(HttpStatus.NOT_FOUND, message)
