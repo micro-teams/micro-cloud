@@ -74,6 +74,8 @@ services:
       - ./backend/backend.jar:/app/backend.jar:ro
       # Operator SSH keys for provisioning init (see deploy/README.md). gen-env.sh creates ./keys/.
       - ./keys:/keys:ro
+      # The template images — the backend enumerates this dir to build its template catalog.
+      - ./templates:/templates:ro
 
   nginx:
     image: nginx:1.27-alpine

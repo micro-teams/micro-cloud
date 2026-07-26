@@ -23,16 +23,13 @@ class MicroCloudConfig {
     /** The synthetic user id the super-admin's tokens are minted under. */
     var superadminId: Long = 1
 
-    /** The template catalog, declared at build/deploy time and seeded into the DB on startup. */
-    var templates: List<TemplateEntry> = emptyList()
-
-    class TemplateEntry {
-        lateinit var name: String
-        var description: String? = null
-        var kind: String = "lxc"
-        /** Where the image comes from when uploading: a local file path or an http(s) URL. */
-        var source: String? = null
-    }
+    /**
+     * The directory the template catalog is enumerated from. Each `*.tar.zst` image found under it
+     * is a template — the template name is the image's parent directory, the kind is its
+     * grandparent (`lxc` / `vm`). In the shipped bundle this is `templates/` mounted at
+     * `/templates`.
+     */
+    var templatesDir: String = "/templates"
 
     /** Proxmox provisioning knobs (credentials come from each cluster, not here). */
     var provisioning: Provisioning = Provisioning()
