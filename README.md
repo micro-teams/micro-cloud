@@ -11,6 +11,25 @@ and quota.
 > `app.microteams` → `app.microteams.microcloud`, and only a minimal authenticated `/ping` endpoint
 > kept. The design lives in the team doc tree under `tech/microcloud/` and `design/microcloud/`.
 
+## Integrators & contributors — read these first
+
+Before writing any code against MicroCloud (integrating an upstream service) or extending it, you
+**must** read, in order:
+
+1. **[`business-model.md`](business-model.md)** (English) / **[`业务模型.md`](业务模型.md)** (中文) —
+   the business model, every concept, and *why* the API is shaped this way, with a worked example and
+   diagrams tracing the chain from Proxmox `cluster/node/pool` up to the tenant-facing **offering**
+   and back down to a concrete landing spot. The two files are the same content in two languages.
+2. **[`MicroCloud-API.yml`](MicroCloud-API.yml)** — the OpenAPI contract, the single source of truth.
+   Its per-operation comments document each endpoint's usage and special cases (e.g. enumeration
+   endpoints that require a mandatory tenant-scope condition).
+
+These explain the deliberate split between the **physical** layer (Proxmox clusters, placements,
+networks — operator-only) and the **logical** layer callers see (offerings, machines). That split
+exists to keep the door open for future compute providers (Proxmox VMs, external clouds, or a lighter
+plain-Docker host with no PVE) and to give callers a small, clear surface. Skipping these docs leads
+to designs that leak Proxmox details or misuse the tenant abstractions.
+
 ## Architecture
 
 ```mermaid

@@ -21,10 +21,29 @@ POSTGRES_USER=microcloud
 POSTGRES_DB=microcloud
 POSTGRES_PASSWORD=$(secret 40)
 JWT_SECRET=$(secret 64)
+# The platform operator's login password (super-admin). Read it back from this file to log in.
+SUPERADMIN_PASSWORD=$(secret 24)
+
+# Host port the gateway (nginx) listens on. Put your TLS-terminating reverse proxy in front of it.
+NGINX_HTTP_PORT=80
+
+# ---- Provisioning (fill in to actually create machines; leave blank to just run the API) ----
+# See deploy/README.md "Provisioning" for what each means. Blank = that feature is off.
+# Fallback ostemplate volid used only if a template hasn't been uploaded to the placement yet.
+MICROCLOUD_PROVISIONING_OS_TEMPLATE=
+# An operator SSH PUBLIC key injected into new containers as root, so the backend can SSH in to init.
+MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY=
+# Path (inside the backend container) to the matching PRIVATE key. Put the key file in ./keys/ and
+# point here, e.g. /keys/operator  (./keys is mounted read-only at /keys).
+MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH=
+# Command run as root over SSH to init a new machine ({user} {sshPubkey} {ip} {gateway} substituted):
+# MICROCLOUD_PROVISIONING_INIT_COMMAND=python3 /root/init-machine.py --user '{user}' --ssh-pubkey '{sshPubkey}'
+MICROCLOUD_PROVISIONING_INIT_COMMAND=
 EOF
 chmod 600 .env
 
-mkdir -p app_data/postgresql app_data/newapi
+mkdir -p app_data/postgresql app_data/newapi keys
 
-echo "Wrote .env (chmod 600) and created app_data/ directories."
+echo "Wrote .env (chmod 600) and created app_data/ + keys/ directories."
+echo "For provisioning: put your operator private key in ./keys/ and fill the MICROCLOUD_PROVISIONING_* lines in .env."
 echo "Next: docker compose up -d   then   docker compose ps   (wait for every service 'healthy')."

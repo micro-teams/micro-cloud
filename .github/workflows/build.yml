@@ -92,6 +92,33 @@ jobs:
           python -m py_compile templates/lxc/debian13/*.py
           pip install pyflakes >/dev/null && python -m pyflakes templates/lxc/debian13/*.py
 
+  # A thin JRE image + ssh client (for init-machine.py). Built and pushed to GHCR; package-zip pins
+  # the shipped compose to the digest this job emits.
+  build-backend-base:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@v6
+        # Don't upload the build-record artifact — package-zip downloads all artifacts and it isn't
+        # a normal zip, which breaks that step.
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: deploy/backend-base
+          push: true
+          tags: ghcr.io/micro-teams/eclipse-temurin:21-jre
+
   build-template:
     runs-on: ubuntu-latest
     steps:
@@ -107,7 +134,7 @@ jobs:
           path: dist/debian13-microcloud.tar.zst
 
   package-zip:
-    needs: [build-jar, build-frontend, lint-scripts, build-template]
+    needs: [build-jar, build-frontend, lint-scripts, build-template, build-backend-base]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -120,6 +147,14 @@ jobs:
           STAGE=microcloud-deploy
           mkdir -p "$STAGE/backend" "$STAGE/frontend"
           cp deploy/docker-compose.yml deploy/nginx.conf deploy/gen-env.sh deploy/README.md "$STAGE/"
+          # Ship the generated schema so ops can see the table structure (and diff it across
+          # releases) when hand-writing a migration during an upgrade.
+          cp backend/CREATE.sql "$STAGE/CREATE.sql"
+          # Pin the backend base image to the exact digest CI just pushed (reproducible deploys).
+          BASE=ghcr.io/micro-teams/eclipse-temurin
+          DIGEST='${{ needs.build-backend-base.outputs.digest }}'
+          sed -i "s#image: ${BASE}:21-jre#image: ${BASE}@${DIGEST}#" "$STAGE/docker-compose.yml"
+          grep -q "${BASE}@sha256:" "$STAGE/docker-compose.yml" || { echo "digest pin failed"; exit 1; }
           cp -r deploy/init "$STAGE/"
           cp artifacts/jar/*.jar "$STAGE/backend/backend.jar"
           cp -r artifacts/frontend-dist/. "$STAGE/frontend/dist/"
@@ -140,11 +175,20 @@ jobs:
   test-compose:
     needs: [package-zip]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: microcloud-deploy
           path: microcloud-deploy
+      # Log in so CI can pull our backend base image; real deploys use it as a public image.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Bring the cluster up and wait for every service to be healthy
         working-directory: microcloud-deploy
         run: |

@@ -6,8 +6,9 @@
 #   postgres   MicroCloud's DB (schema "microcloud")
 #
 # Secrets come from .env (generate it with `bash gen-env.sh`). All state lives in ./app_data/ as
-# plain host directories (no docker volumes) so it's visible and easy to back up. package-zip (CI)
-# resolves each image tag to a digest and pins it into the shipped compose for reproducibility.
+# plain host directories (no docker volumes) so it's visible and easy to back up. CI's package-zip
+# step pins the backend base image (our eclipse-temurin+ssh) to its digest in the shipped compose;
+# the stock images (postgres/nginx) and our newapi release are referenced by tag.
 
 services:
   postgres:
@@ -44,7 +45,9 @@ services:
       start_period: 20s
 
   backend:
-    image: eclipse-temurin:21-jre
+    # Stock JRE + an ssh client (for init-machine.py) — our thin image, pinned to a digest by CI's
+    # package-zip step. See deploy/backend-base/Dockerfile.
+    image: ghcr.io/micro-teams/eclipse-temurin:21-jre
     restart: unless-stopped
     depends_on:
       postgres:
@@ -59,7 +62,14 @@ services:
         "spring.datasource.username":"${POSTGRES_USER}",
         "spring.datasource.password":"${POSTGRES_PASSWORD}",
         "spring.jpa.hibernate.ddl-auto":"update",
-        "application.jwt-secret":"${JWT_SECRET}"}
+        "application.jwt-secret":"${JWT_SECRET}",
+        "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}"}
+      # Provisioning config (from .env; blank = feature off). Spring maps these env names to
+      # microcloud.provisioning.*. See deploy/README.md for what each does and when it's needed.
+      MICROCLOUD_PROVISIONING_OS_TEMPLATE: ${MICROCLOUD_PROVISIONING_OS_TEMPLATE:-}
+      MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY: ${MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY:-}
+      MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH: ${MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH:-}
+      MICROCLOUD_PROVISIONING_INIT_COMMAND: ${MICROCLOUD_PROVISIONING_INIT_COMMAND:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
@@ -68,6 +78,8 @@ services:
       start_period: 40s
     volumes:
       - ./backend/backend.jar:/app/backend.jar:ro
+      # Operator SSH keys for provisioning init (see deploy/README.md). gen-env.sh creates ./keys/.
+      - ./keys:/keys:ro
 
   nginx:
     image: nginx:1.27-alpine
