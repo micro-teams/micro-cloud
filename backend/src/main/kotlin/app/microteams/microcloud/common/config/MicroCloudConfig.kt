@@ -37,19 +37,27 @@ class MicroCloudConfig {
     /** Proxmox provisioning knobs (credentials come from each cluster, not here). */
     var provisioning: Provisioning = Provisioning()
 
+    // These default to the shipped bundle's layout (gen-env.sh generates ./keys/operator, compose
+    // mounts it at /keys), so provisioning works with zero manual configuration. Override only for
+    // a
+    // non-standard deployment (e.g. set init-command blank to skip SSH init entirely).
     class Provisioning {
-        /** Fallback ostemplate volid when a template has no uploaded image on the placement. */
-        var osTemplate: String? = null
-        /** Root SSH public key injected into new containers (so the backend can init them). */
+        /**
+         * Root SSH public key injected into new containers so the backend can SSH in to init them.
+         * If blank, it is read from `${sshPrivateKeyPath}.pub`.
+         */
         var rootSshPublicKey: String? = null
-        /** Path to the matching root SSH private key used to run init-machine.py over SSH. */
-        var sshPrivateKeyPath: String? = null
+        /** The root SSH private key used to run init-machine.py over SSH. */
+        var sshPrivateKeyPath: String? = "/keys/operator"
         /**
          * Remote command run as root over SSH to initialize a fresh container. Placeholders {user}
-         * {sshPubkey} {ip} {gateway} are substituted. If null, SSH init is skipped (the container
-         * is still created + started).
+         * {sshPubkey} {ip} {gateway} are substituted. Blank skips SSH init (the container is still
+         * created + started). The default runs the baked init-machine.py: creates the non-root
+         * login user + authorizes its key, grants sudo + docker, then hardens (disables root SSH,
+         * ufw).
          */
-        var initCommand: String? = null
+        var initCommand: String? =
+            "python3 /root/init-machine.py --user '{user}' --ssh-pubkey '{sshPubkey}'"
         /** How long to wait for a Proxmox create/start task to finish. */
         var taskTimeoutSeconds: Long = 180
     }

@@ -50,19 +50,12 @@ consumed — nothing is silently ignored.
 | `SUPERADMIN_PASSWORD` | backend (`microcloud.superadmin-password`) | the super-admin login password |
 | `NGINX_HTTP_PORT` | nginx `ports` | host port the gateway listens on (default 80) |
 
-**Fill in for real provisioning (blank = that feature is off):**
-
-| Variable | Purpose |
-| --- | --- |
-| `MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY` | an operator SSH **public** key injected into new containers as root, so the backend can SSH in to initialize them |
-| `MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH` | path **inside the container** to the matching **private** key. Put the key file in `./keys/` (mounted read-only at `/keys`) and set e.g. `/keys/operator` |
-| `MICROCLOUD_PROVISIONING_INIT_COMMAND` | command run as root over SSH to init a machine; `{user} {sshPubkey} {ip} {gateway}` are substituted. e.g. `python3 /root/init-machine.py --user '{user}' --ssh-pubkey '{sshPubkey}'` |
-| `MICROCLOUD_PROVISIONING_OS_TEMPLATE` | fallback ostemplate volid used only if a template hasn't been uploaded to the placement yet, e.g. `local:vztmpl/debian13.tar.zst` |
-
-Without the provisioning variables the API still runs and machines still get created as running
-LXCs with a private IP — they just won't have the non-root login user + authorized key set up. To
-enable that: generate an operator keypair, put the private key in `./keys/`, and set the four
-variables (see "Provisioning" below).
+**Provisioning needs no environment variables.** `gen-env.sh` generates the operator SSH keypair at
+`./keys/operator`, and the backend defaults to it (`/keys/operator`, mounted read-only at `/keys`)
+and to the standard init command — so `gen-env.sh` + `docker compose up -d` gives working
+provisioning out of the box. (Advanced: the defaults can be overridden by adding
+`MICROCLOUD_PROVISIONING_*` env to the backend — e.g. set `microcloud.provisioning.init-command`
+blank to skip SSH init — but you don't need to.)
 
 ## Upgrades & the schema (`CREATE.sql`)
 
@@ -81,11 +74,11 @@ traffic out through the host), so no special networking is needed — the backen
 host routes to. The backend image (`ghcr.io/micro-teams/eclipse-temurin`, stock JRE + an ssh client,
 public, digest-pinned by CI) ships the ssh client that init needs.
 
-To have new machines come up with a non-root login user + authorized key, generate an operator
-keypair (`ssh-keygen -t ed25519 -f keys/operator`), then fill the `MICROCLOUD_PROVISIONING_*` lines
-in `.env` (documented in the table above): the public key goes in
-`MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY`, `MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH` points
-at `/keys/operator`, and `MICROCLOUD_PROVISIONING_INIT_COMMAND` runs init-machine.py.
+New machines are initialized automatically: `gen-env.sh` generates the operator keypair
+`./keys/operator`, whose public key the backend injects into each new container (as root) and whose
+private key it uses to SSH in and run `init-machine.py`. That creates the tenant's non-root login
+user, authorizes its key, grants it sudo + docker, and then **hardens** the machine (disables root
+SSH, enables the firewall) — so no operator backdoor is left. No configuration required.
 
 ## Domain-independent
 

@@ -41,8 +41,8 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @AutoConfigureMockMvc
 @TestMethodOrder(OrderAnnotation::class)
-// A fallback ostemplate so the (mocked) provisioner has an image to point pct create at.
-@TestPropertySource(properties = ["microcloud.provisioning.os-template=local:vztmpl/mock.tar.zst"])
+// No SSH init: ProxmoxClient is mocked, and there's no real machine to SSH into.
+@TestPropertySource(properties = ["microcloud.provisioning.init-command="])
 class MachineProvisionTest
 @Autowired
 constructor(

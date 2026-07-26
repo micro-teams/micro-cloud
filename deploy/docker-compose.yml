@@ -64,12 +64,6 @@ services:
         "spring.jpa.hibernate.ddl-auto":"update",
         "application.jwt-secret":"${JWT_SECRET}",
         "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}"}
-      # Provisioning config (from .env; blank = feature off). Spring maps these env names to
-      # microcloud.provisioning.*. See deploy/README.md for what each does and when it's needed.
-      MICROCLOUD_PROVISIONING_OS_TEMPLATE: ${MICROCLOUD_PROVISIONING_OS_TEMPLATE:-}
-      MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY: ${MICROCLOUD_PROVISIONING_ROOT_SSH_PUBLIC_KEY:-}
-      MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH: ${MICROCLOUD_PROVISIONING_SSH_PRIVATE_KEY_PATH:-}
-      MICROCLOUD_PROVISIONING_INIT_COMMAND: ${MICROCLOUD_PROVISIONING_INIT_COMMAND:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
