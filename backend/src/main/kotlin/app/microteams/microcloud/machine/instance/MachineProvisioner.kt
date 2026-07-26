@@ -202,6 +202,9 @@ class MachineProvisioner(
     private fun runInit(machine: Machine, gateway: String) {
         val command = config.provisioning.initCommand?.takeIf { it.isNotBlank() } ?: return
         val keyPath = config.provisioning.sshPrivateKeyPath?.takeIf { it.isNotBlank() } ?: return
+        // `pct start` returning does NOT mean the guest is reachable — it's still booting (sshd not
+        // up, network not ready). Wait until TCP :22 accepts a connection before SSHing in.
+        waitForSsh(machine.ip!!, config.provisioning.sshReadyTimeoutSeconds)
         val remote =
             command
                 .replace("{user}", machine.loginUser ?: "")
@@ -228,6 +231,21 @@ class MachineProvisioner(
         val code = process.waitFor()
         if (code != 0) throw IllegalStateException("init-machine over SSH failed ($code): $output")
         log.info("init-machine for machine {} succeeded", machine.id)
+    }
+
+    /** Poll TCP :22 on the machine until it accepts a connection (the guest has booted enough). */
+    private fun waitForSsh(ip: String, timeoutSeconds: Long) {
+        var waited = 0L
+        while (waited < timeoutSeconds) {
+            try {
+                java.net.Socket().use { it.connect(java.net.InetSocketAddress(ip, 22), 3000) }
+                return
+            } catch (e: Exception) {
+                Thread.sleep(3000)
+                waited += 3
+            }
+        }
+        throw IllegalStateException("$ip did not become SSH-reachable within ${timeoutSeconds}s")
     }
 
     private fun randomPassword(): String {

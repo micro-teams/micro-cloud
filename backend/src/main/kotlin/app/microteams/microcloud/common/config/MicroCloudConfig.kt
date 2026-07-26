@@ -57,5 +57,7 @@ class MicroCloudConfig {
             "python3 /root/init-machine.py --user '{user}' --ssh-pubkey '{sshPubkey}'"
         /** How long to wait for a Proxmox create/start task to finish. */
         var taskTimeoutSeconds: Long = 180
+        /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
+        var sshReadyTimeoutSeconds: Long = 120
     }
 }
