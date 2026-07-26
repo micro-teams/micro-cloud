@@ -3,8 +3,10 @@
 
 An LXC template is a compressed rootfs tarball. Rather than assemble one from scratch, this routine
 DOWNLOADS the standard Debian 13 LXC template Proxmox ships (~124 MB `.tar.zst` from
-download.proxmox.com), customizes it in a chroot (installs Claude Code and its deps, bakes in
+download.proxmox.com), customizes it in a chroot (installs base packages + Docker, bakes in
 init-machine.py, enables root SSH for first-boot init), and repackages it into our template tarball.
+Claude Code is
+NOT baked in — init-machine.py installs it per-user at first boot to keep the template small.
 
 It is the COMPILE step for the template: the output is what ships in the bundle; this script does
 not. stdlib-only (no pip packages); it shells out to `tar`, `chroot`, `mount`, `apt` — not Python
@@ -46,8 +48,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--output", required=True, help="path to write the resulting template tarball")
     p.add_argument("--base-url", default=DEFAULT_BASE_URL,
                    help="standard Debian 13 LXC template: an http(s) URL or a local .tar.zst path")
-    p.add_argument("--claude-code-version", default="latest",
-                   help="npm version spec for @anthropic-ai/claude-code")
     p.add_argument("--workdir", default=None,
                    help="scratch directory (default: a fresh temp dir, removed afterwards)")
     return p.parse_args(argv)
@@ -80,7 +80,7 @@ def extract_rootfs(tarball: str, rootfs: str) -> None:
     run(["tar", "--zstd", "--numeric-owner", "-xpf", tarball, "-C", rootfs])
 
 
-def customize(rootfs: str, packages: list[str], claude_version: str) -> None:
+def customize(rootfs: str, packages: list[str]) -> None:
     """Install packages + Claude Code and bake in init-machine.py, inside a chroot."""
     shutil.copy("/etc/resolv.conf", os.path.join(rootfs, "etc/resolv.conf"))
     mounts = ["proc", "sys", "dev"]
@@ -94,20 +94,28 @@ set -eux
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends {' '.join(packages)}
-# Node.js from NodeSource (a single lean package; Debian's own npm drags in a huge node-* tree).
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y --no-install-recommends nodejs
-npm install -g @anthropic-ai/claude-code@{claude_version}
-# Trim: the npm package bundles per-platform binaries — drop the Windows exe (~260 MB) — and clear
-# the npm cache, so the template stays close to the ~124 MB stock size.
-find /usr/lib/node_modules -name '*.exe' -delete
-npm cache clean --force || true
-rm -rf /root/.npm /tmp/* /var/tmp/*
+
+# Docker, via Docker's official apt repository (the standard Debian install flow). Machines are
+# unprivileged LXCs with nesting enabled, so the Docker daemon runs inside them.
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $CODENAME stable" > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable docker || true
+
+# Claude Code is NOT baked into the template — it is installed per-user at first boot by
+# init-machine.py (via claude.ai/install.sh). That keeps the template small, always installs the
+# latest, and runs the installer on a real running system rather than in this chroot (where its
+# self-install step hangs).
 # Root may SSH into a freshly created machine only until init-machine.py hardens it away.
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 systemctl enable ssh || true
 apt-get clean
-rm -rf /var/lib/apt/lists/*
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 """
         run(["chroot", rootfs, "/bin/bash", "-c", script])
     finally:
@@ -138,7 +146,7 @@ def main(argv: list[str]) -> int:
     try:
         base = fetch_base(args.base_url, os.path.join(workdir, "base.tar.zst"))
         extract_rootfs(base, rootfs)
-        customize(rootfs, read_packages(), args.claude_code_version)
+        customize(rootfs, read_packages())
         repackage(rootfs, args.output)
     finally:
         if owns_workdir:

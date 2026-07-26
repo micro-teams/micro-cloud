@@ -6,13 +6,31 @@ servers:
   - url: "http://localhost:8080"
 
 # The single API contract. The backend's interfaces (app.microteams.microcloud.api.*Api) and the
-# test frontend's client are both GENERATED from this file — neither side hand-writes a client.
-# The generator names an Api class after a path's first segment, so the path IS the structure.
+# test frontend's client are both GENERATED from this file. The generator names an Api class after a
+# path's first segment, so the path IS the structure.
 #
-# This is the stripped skeleton: only the minimal authenticated /ping endpoint exists, to prove the
-# frontend -> backend -> auth chain end to end. Real MicroCloud endpoints (tenants, customers,
-# accounts, machines, api-keys, billing, audit) are added here first, then implemented by the one
-# controller per path prefix.
+# Design principle: the TENANT-facing surface is as simple as possible and never exposes Proxmox.
+# Tenants deal only with two logical abstractions:
+#   - machine-type ("机型"): a class of machines with the same performance, with allowed ranges for
+#     cores/memory/disk. Which physical placements back it is a super-admin concern.
+#   - zone ("分区"): a locality partition; machines in the same zone communicate faster. A disjoint,
+#     complete partition of the placements. (The faster-comm is arranged by admins physically; it is
+#     not code.)
+# This keeps the door open for compute providers beyond Proxmox.
+#
+# The SUPER-ADMIN surface configures the physical reality behind those abstractions: Proxmox
+# clusters (credentials), placements (a cluster+node+pool+storage coordinate), networks (an IP range
+# bound to a placement), machine-types, zones, and machine-template uploads.
+#
+# Two auth realms (components.securitySchemes):
+#   - tenantSecret : a tenant's auth secret (Bearer); scopes + audits every call. Tenant surface.
+#   - superAdmin   : the platform operator's session (Bearer). Admin surface.
+#
+# Not yet included (future): super-admin login endpoint, api-keys + newapi relay, usage/billing
+# metering, audit read APIs.
+
+security:
+  - tenantSecret: []
 
 paths:
   /ping:
@@ -27,10 +45,1245 @@ paths:
               schema:
                 type: object
                 properties:
-                  code:
-                    type: integer
-                  message:
-                    type: string
-                required:
-                  - code
-                  - message
+                  code: { type: integer }
+                  message: { type: string }
+                required: [code, message]
+
+  # ======================================================================
+  # SUPER-ADMIN — login (exchange the strong password for a session token)
+  # ======================================================================
+
+  /superadmin/login:
+    post:
+      tags: [superadmin]
+      operationId: superadminLogin
+      summary: Log in as the platform operator; returns a session token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SuperadminLoginRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SuperadminLoginResponse" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ======================================================================
+  # SUPER-ADMIN — tenant management
+  # ======================================================================
+
+  /tenant:
+    get:
+      tags: [tenant]
+      operationId: listTenants
+      summary: List tenants
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListTenantsResponse" } } } }
+    post:
+      tags: [tenant]
+      operationId: createTenant
+      summary: Create a tenant
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateTenantRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Tenant" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /tenant/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [tenant]
+      operationId: getTenant
+      summary: Get a tenant
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Tenant" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [tenant]
+      operationId: updateTenant
+      summary: Update a tenant (rename, enable/disable)
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateTenantRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Tenant" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [tenant]
+      operationId: deleteTenant
+      summary: Delete a tenant (must have no customers)
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /tenant/{id}/secret:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [tenant]
+      operationId: listTenantSecrets
+      summary: List a tenant's auth secrets (metadata only; never the value)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListTenantSecretsResponse" } } } }
+    post:
+      tags: [tenant]
+      operationId: createTenantSecret
+      description: >-
+        Mint a new auth secret for the tenant. The plaintext value is returned ONCE (only its hash is stored); the tenant uses it as a Bearer token.
+      summary: Mint a new auth secret (plaintext value returned ONCE)
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateTenantSecretRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CreateTenantSecretResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /tenant/{id}/secret/{secretId}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+      - name: secretId
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    delete:
+      tags: [tenant]
+      operationId: revokeTenantSecret
+      summary: Revoke a tenant auth secret
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # SUPER-ADMIN — Proxmox clusters (credentials) + live inventory
+  # ======================================================================
+
+  /machine/proxmox:
+    get:
+      tags: [proxmox]
+      operationId: listProxmoxClusters
+      summary: List configured Proxmox clusters
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListProxmoxClustersResponse" } } } }
+    post:
+      tags: [proxmox]
+      operationId: createProxmoxCluster
+      description: >-
+        Register a Proxmox provider credential. tokenSecret is WRITE-ONLY — it is stored for runtime use and never returned by any read.
+      summary: Add a Proxmox cluster (endpoint + API token)
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateProxmoxClusterRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ProxmoxCluster" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/proxmox/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [proxmox]
+      operationId: getProxmoxCluster
+      summary: Get a Proxmox cluster
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProxmoxCluster" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [proxmox]
+      operationId: updateProxmoxCluster
+      summary: Update a Proxmox cluster (rotate token, enable/disable)
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateProxmoxClusterRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProxmoxCluster" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [proxmox]
+      operationId: deleteProxmoxCluster
+      summary: Remove a Proxmox cluster (must be unused by placements)
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/proxmox/{id}/inventory:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [proxmox]
+      operationId: getProxmoxInventory
+      description: >-
+        Live read from the cluster (nodes / pools / storages / bridges) to help an operator pick placement coordinates. Not stored.
+      summary: Live inventory read from the cluster (nodes / pools / storages / bridges) to help configure placements
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ProxmoxInventory" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # SUPER-ADMIN — placements (cluster+node+pool+storage) and networks
+  # ======================================================================
+
+  /machine/placement:
+    get:
+      tags: [machine]
+      operationId: listPlacements
+      summary: List placements (a cluster+node+pool+storage coordinate)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListPlacementsResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createPlacement
+      summary: Register a placement
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreatePlacementRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Placement" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/placement/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getPlacement
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Placement" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [machine]
+      operationId: updatePlacement
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdatePlacementRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Placement" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deletePlacement
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/network:
+    get:
+      tags: [machine]
+      operationId: listNetworks
+      summary: List network segments (an IP range bound to a placement)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: placement_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListNetworksResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createNetwork
+      summary: Add a network segment bound to a placement
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateNetworkRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Network" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/network/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getNetwork
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Network" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [machine]
+      operationId: updateNetwork
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateNetworkRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Network" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deleteNetwork
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # Machine types (机型) and zones (分区) — admin writes, tenants read
+  # ======================================================================
+
+  /machine/type:
+    get:
+      tags: [machine]
+      operationId: listMachineTypes
+      summary: List machine types (tenant-visible; performance class + allowed spec ranges)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListMachineTypesResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createMachineType
+      summary: Create a machine type
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateMachineTypeRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/MachineType" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/type/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getMachineType
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MachineType" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [machine]
+      operationId: updateMachineType
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateMachineTypeRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MachineType" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deleteMachineType
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/zone:
+    get:
+      tags: [machine]
+      operationId: listZones
+      summary: List zones (tenant-visible locality partitions)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListZonesResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createZone
+      summary: Create a zone
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateZoneRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Zone" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/zone/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getZone
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Zone" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [machine]
+      operationId: updateZone
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateZoneRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Zone" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deleteZone
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # Machine templates — tenants list; admin uploads to placements (status tracked)
+  # ======================================================================
+
+  /machine/template:
+    get:
+      tags: [machine]
+      operationId: listMachineTemplates
+      summary: List available machine templates (built at build time; list-only)
+      security: [{ superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListMachineTemplatesResponse" } } } }
+
+  /machine/template/{id}/upload:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: listTemplateUploads
+      summary: Per-placement upload status of a template
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListTemplateUploadsResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [machine]
+      operationId: uploadTemplate
+      description: >-
+        Copy the template image onto a placement's storage. ASYNC: returns 202; poll GET /machine/template/{id}/upload for per-placement status until 'done'. A machine can only be created on a placement where its template is 'done'.
+      summary: Upload/refresh the template image to a placement's storage (async; poll status)
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UploadTemplateRequest" } } } }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/TemplateUpload" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # Offerings — the (machine type, zone, network) triples a tenant may use.
+  # Admin composes them per tenant; the tenant lists its own via GET /offering.
+  # ======================================================================
+
+  /machine/offering:
+    get:
+      tags: [machine]
+      operationId: listOfferings
+      description: >-
+        DUAL-REALM. Super-admin: all offerings, or filter by tenant_id. Tenant: only its own (the tenant_id query is ignored). Each row embeds the machine type's spec ranges + zone/template names, so a tenant needs no other catalog lookups.
+      summary: "List offerings — super-admin sees all (optionally by tenant_id); a tenant sees its own, each carrying the machine type spec ranges, zone, and template it needs"
+      security: [{ tenantSecret: [] }, { superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: tenant_id
+          in: query
+          description: super-admin only; ignored for a tenant (which always sees its own)
+          schema: { type: integer, format: int64 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListOfferingsResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createOffering
+      description: >-
+        Grant a tenant a (machine type, zone, template) triple. Validates the three exist AND that the type and zone share at least one placement (else no machine from it could ever land).
+      summary: Grant a tenant a (machine type, zone, network) triple
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateOfferingRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Offering" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/offering/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getOffering
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Offering" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [machine]
+      operationId: updateOffering
+      description: >-
+        Enable or disable an offering. A disabled offering can't be used to create machines.
+      summary: Enable/disable an offering
+      security: [{ superAdmin: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateOfferingRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Offering" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deleteOffering
+      security: [{ superAdmin: [] }]
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # TENANT — customers
+  # ======================================================================
+
+  /customer:
+    get:
+      tags: [customer]
+      operationId: listCustomers
+      description: >-
+        List this tenant's customers. Enumeration = composable optional filters, but the tenant-scope condition is ALWAYS enforced: you only ever see your own customers.
+      summary: List the tenant's customers
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: external_ref
+          in: query
+          schema: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListCustomersResponse" } } } }
+    post:
+      tags: [customer]
+      operationId: createCustomer
+      description: >-
+        Register one of the tenant's end-users (keyed by externalRef, the tenant's own user id).
+      summary: Create a customer
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateCustomerRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /customer/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [customer]
+      operationId: getCustomer
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [customer]
+      operationId: deleteCustomer
+      summary: Delete a customer (must have no machines or accounts)
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # TENANT — fund accounts
+  # ======================================================================
+
+  /account:
+    get:
+      tags: [account]
+      operationId: listAccounts
+      description: >-
+        List fund accounts. Optional customer_id filter — but it MUST reference a customer that belongs to the calling tenant, else the call is rejected.
+      summary: List accounts (optionally for one customer)
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: customer_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListAccountsResponse" } } } }
+    post:
+      tags: [account]
+      operationId: createAccount
+      description: >-
+        Open a prepaid fund account under one of the tenant's customers. Generic ledger: pure numeric balance, no unit.
+      summary: Create a fund account for a customer
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateAccountRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /account/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [account]
+      operationId: getAccount
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /account/{id}/ledger:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [account]
+      operationId: listAccountLedger
+      description: >-
+        The account's full change history (top-ups / charges / …), newest-scan paginated.
+      summary: List an account's ledger (every balance change; charges, top-ups, daily grants)
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListAccountLedgerResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /account/{id}/topup:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [account]
+      operationId: topupAccount
+      description: >-
+        Add funds to an account (positive amount). Recorded as one immutable ledger entry.
+      summary: Add funds to an account (returns the updated account)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TopupAccountRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ======================================================================
+  # TENANT — machines (simple: type + zone + spec; no Proxmox)
+  # ======================================================================
+
+  /machine:
+    get:
+      tags: [machine]
+      operationId: listMachines
+      description: >-
+        List the tenant's machines. Optional customer_id filter must reference the tenant's own customer.
+      summary: List machines (optionally for one customer)
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: customer_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListMachinesResponse" } } } }
+    post:
+      tags: [machine]
+      operationId: createMachine
+      description: >-
+        Provision a machine from an OFFERING (which fixes machine type + zone + template) plus a hostname, a spec within the offering type's ranges, a login user + SSH key, and the fund account to charge. ASYNC: returns 201 with status 'provisioning'; the CT is created on Proxmox in the background — poll GET /machine/{id} until 'running' or 'error'. MicroCloud auto-selects the placement (backing the type, in the zone, with the template uploaded, with a free IP) and leases the private IP.
+      summary: Provision a machine (pick a type, zone, template, and a spec within the type's ranges)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateMachineRequest" } } } }
+      responses:
+        "201": { description: Created (provisioning has started; poll for status), content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /machine/{id}:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: getMachine
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [machine]
+      operationId: deleteMachine
+      summary: Destroy a machine (async; the Proxmox CT is torn down in the background)
+      responses:
+        "202": { description: "Accepted — deletion started (status becomes 'deleting'); poll GET until it 404s" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/{id}/start:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: startMachine
+      summary: Start a stopped machine (async; poll for status)
+      responses:
+        "202": { description: "Accepted — start requested (status 'starting'); poll GET for 'running'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/{id}/stop:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: stopMachine
+      summary: Stop a running machine (async; does not destroy it)
+      responses:
+        "202": { description: "Accepted — stop requested (status 'stopping'); poll GET for 'stopped'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    tenantSecret:
+      type: http
+      scheme: bearer
+      description: >
+        A tenant auth secret (one of the tenant's several secrets). `Authorization: Bearer <secret>`.
+        The backend matches its stored hash, resolves the tenant, scopes the call to that tenant, and
+        audits it.
+    superAdmin:
+      type: http
+      scheme: bearer
+      description: >
+        The platform operator's session token (from strong-password login). `Authorization: Bearer
+        <token>`. Grants tenant management and platform configuration.
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    PageStart:
+      name: page_start
+      in: query
+      description: cursor — id of the first item to return
+      schema: { type: integer, format: int64 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Not Found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: Unauthorized
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+
+    SuperadminLoginRequest:
+      type: object
+      properties:
+        password: { type: string }
+      required: [password]
+    SuperadminLoginResponse:
+      type: object
+      properties:
+        token: { type: string, description: session bearer token }
+        expiresAt: { type: integer, format: int64, description: epoch seconds when the token expires }
+      required: [token, expiresAt]
+    Error:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        error: { type: string }
+      required: [code, message]
+
+    Page:
+      type: object
+      description: cursor-pagination metadata
+      properties:
+        pageStart: { type: integer, format: int64, nullable: true, description: id of the first item on this page }
+        pageSize: { type: integer }
+        hasPrev: { type: boolean }
+        prevStart: { type: integer, format: int64, nullable: true, description: cursor for the previous page }
+        hasMore: { type: boolean }
+        nextStart: { type: integer, format: int64, nullable: true, description: cursor for the next page; null if no more }
+      required: [pageSize, hasPrev, hasMore]
+
+    # ---- Tenants ----
+    TenantStatus: { type: string, enum: [active, suspended] }
+    Tenant:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        status: { $ref: "#/components/schemas/TenantStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, status]
+    CreateTenantRequest:
+      type: object
+      properties: { name: { type: string } }
+      required: [name]
+    UpdateTenantRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        status: { $ref: "#/components/schemas/TenantStatus" }
+    ListTenantsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Tenant" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    TenantSecretStatus: { type: string, enum: [active, revoked] }
+    TenantSecret:
+      type: object
+      description: auth-secret metadata; the value is never returned here
+      properties:
+        id: { type: integer, format: int64 }
+        tenantId: { type: integer, format: int64 }
+        label: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/TenantSecretStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+      required: [id, tenantId, status]
+    CreateTenantSecretRequest:
+      type: object
+      properties: { label: { type: string } }
+    CreateTenantSecretResponse:
+      type: object
+      description: returned once on creation — the only time the plaintext secret is exposed
+      properties:
+        id: { type: integer, format: int64 }
+        tenantId: { type: integer, format: int64 }
+        label: { type: string, nullable: true }
+        secret: { type: string, description: "plaintext auth secret; store it now, not retrievable later" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, tenantId, secret]
+    ListTenantSecretsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/TenantSecret" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Proxmox clusters ----
+    ProxmoxClusterStatus: { type: string, enum: [active, disabled] }
+    ProxmoxCluster:
+      type: object
+      description: a Proxmox provider credential (the token secret is write-only, never returned)
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        apiUrl: { type: string, description: "e.g. https://pve.example:8006" }
+        tokenId: { type: string, description: "e.g. user@pve!tokenname" }
+        verifyTls: { type: boolean }
+        status: { $ref: "#/components/schemas/ProxmoxClusterStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, apiUrl, tokenId, status]
+    CreateProxmoxClusterRequest:
+      type: object
+      properties:
+        name: { type: string }
+        apiUrl: { type: string }
+        tokenId: { type: string }
+        tokenSecret: { type: string, description: the Proxmox API token secret (write-only) }
+        verifyTls: { type: boolean, default: true }
+      required: [name, apiUrl, tokenId, tokenSecret]
+    UpdateProxmoxClusterRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        apiUrl: { type: string }
+        tokenId: { type: string }
+        tokenSecret: { type: string }
+        verifyTls: { type: boolean }
+        status: { $ref: "#/components/schemas/ProxmoxClusterStatus" }
+    ListProxmoxClustersResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ProxmoxCluster" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+    ProxmoxInventory:
+      type: object
+      description: live read from the cluster to help pick placement coordinates
+      properties:
+        nodes: { type: array, items: { type: string } }
+        pools: { type: array, items: { type: string } }
+        storages:
+          type: array
+          items:
+            type: object
+            properties:
+              node: { type: string }
+              storage: { type: string }
+              content: { type: string }
+        bridges:
+          type: array
+          items:
+            type: object
+            properties:
+              node: { type: string }
+              bridge: { type: string }
+              cidr: { type: string, nullable: true }
+      required: [nodes, pools, storages, bridges]
+
+    # ---- Placements + networks ----
+    PlacementStatus: { type: string, enum: [active, disabled] }
+    Placement:
+      type: object
+      description: a concrete cluster+node+pool+storage coordinate machines can land on
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        clusterId: { type: integer, format: int64 }
+        node: { type: string }
+        pool: { type: string }
+        storage: { type: string, description: "storage for the machine rootfs, e.g. local-lvm" }
+        status: { $ref: "#/components/schemas/PlacementStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, clusterId, node, pool, storage, status]
+    CreatePlacementRequest:
+      type: object
+      properties:
+        name: { type: string }
+        clusterId: { type: integer, format: int64 }
+        node: { type: string }
+        pool: { type: string }
+        storage: { type: string }
+      required: [name, clusterId, node, pool, storage]
+    UpdatePlacementRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        storage: { type: string }
+        status: { $ref: "#/components/schemas/PlacementStatus" }
+    ListPlacementsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Placement" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    NetworkStatus: { type: string, enum: [active, disabled] }
+    Network:
+      type: object
+      description: an IP range bound to a placement; machines in that placement draw IPs from it
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, nullable: true }
+        placementId: { type: integer, format: int64 }
+        startIp: { type: string, description: first usable IPv4 (inclusive) }
+        endIp: { type: string, description: last usable IPv4 (inclusive) }
+        gateway: { type: string }
+        prefixLength: { type: integer, description: "e.g. 20 for /20" }
+        bridge: { type: string, description: "Proxmox bridge, e.g. vmbr0" }
+        status: { $ref: "#/components/schemas/NetworkStatus" }
+        totalCount: { type: integer, nullable: true, description: total addresses (read-only) }
+        allocatedCount: { type: integer, nullable: true, description: allocated addresses (read-only) }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, placementId, startIp, endIp, gateway, prefixLength, bridge, status]
+    CreateNetworkRequest:
+      type: object
+      properties:
+        name: { type: string }
+        placementId: { type: integer, format: int64 }
+        startIp: { type: string }
+        endIp: { type: string }
+        gateway: { type: string }
+        prefixLength: { type: integer }
+        bridge: { type: string }
+      required: [placementId, startIp, endIp, gateway, prefixLength, bridge]
+    UpdateNetworkRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        gateway: { type: string }
+        prefixLength: { type: integer }
+        bridge: { type: string }
+        status: { $ref: "#/components/schemas/NetworkStatus" }
+    ListNetworksResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Network" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Machine types + zones ----
+    MachineTypeStatus: { type: string, enum: [active, disabled] }
+    MachineType:
+      type: object
+      description: a performance class; backed by one or more placements (super-admin detail)
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        placementIds:
+          type: array
+          items: { type: integer, format: int64 }
+          description: placements that back this type (admin config)
+        coresMin: { type: integer }
+        coresMax: { type: integer }
+        memoryMbMin: { type: integer }
+        memoryMbMax: { type: integer }
+        diskGbMin: { type: integer }
+        diskGbMax: { type: integer }
+        status: { $ref: "#/components/schemas/MachineTypeStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, status]
+    CreateMachineTypeRequest:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        placementIds: { type: array, items: { type: integer, format: int64 } }
+        coresMin: { type: integer }
+        coresMax: { type: integer }
+        memoryMbMin: { type: integer }
+        memoryMbMax: { type: integer }
+        diskGbMin: { type: integer }
+        diskGbMax: { type: integer }
+      required: [name, placementIds, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax]
+    UpdateMachineTypeRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        description: { type: string }
+        placementIds: { type: array, items: { type: integer, format: int64 } }
+        coresMin: { type: integer }
+        coresMax: { type: integer }
+        memoryMbMin: { type: integer }
+        memoryMbMax: { type: integer }
+        diskGbMin: { type: integer }
+        diskGbMax: { type: integer }
+        status: { $ref: "#/components/schemas/MachineTypeStatus" }
+    ListMachineTypesResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MachineType" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    ZoneStatus: { type: string, enum: [active, disabled] }
+    Zone:
+      type: object
+      description: a locality partition of placements (disjoint, complete); same zone = faster comm
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        placementIds: { type: array, items: { type: integer, format: int64 } }
+        status: { $ref: "#/components/schemas/ZoneStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, status]
+    CreateZoneRequest:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        placementIds: { type: array, items: { type: integer, format: int64 } }
+      required: [name, placementIds]
+    UpdateZoneRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        name: { type: string }
+        description: { type: string }
+        placementIds: { type: array, items: { type: integer, format: int64 } }
+        status: { $ref: "#/components/schemas/ZoneStatus" }
+    ListZonesResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Zone" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Machine templates + uploads ----
+    MachineTemplateStatus: { type: string, enum: [active, disabled] }
+    MachineTemplate:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, description: "stable identifier, e.g. debian13" }
+        description: { type: string, nullable: true }
+        kind: { type: string, enum: [lxc, vm] }
+        status: { $ref: "#/components/schemas/MachineTemplateStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, name, kind, status]
+    ListMachineTemplatesResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MachineTemplate" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    TemplateUploadStatus: { type: string, enum: [pending, uploading, done, error] }
+    TemplateUpload:
+      type: object
+      description: state of a template's image on one placement's storage
+      properties:
+        id: { type: integer, format: int64 }
+        templateId: { type: integer, format: int64 }
+        placementId: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/TemplateUploadStatus" }
+        volid: { type: string, nullable: true, description: "Proxmox volume id once uploaded" }
+        jobLog: { type: string, nullable: true, description: upload/import job log }
+        updatedAt: { type: string, format: date-time, nullable: true }
+      required: [id, templateId, placementId, status]
+    UploadTemplateRequest:
+      type: object
+      properties:
+        placementId: { type: integer, format: int64 }
+      required: [placementId]
+    ListTemplateUploadsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/TemplateUpload" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Offerings (the (machine type, zone, template) triples a tenant may use) ----
+    OfferingStatus: { type: string, enum: [active, disabled] }
+    Offering:
+      type: object
+      description: a (machine type, zone, template) triple a tenant may use; carries the type spec ranges so the tenant needs no other lookups
+      properties:
+        id: { type: integer, format: int64 }
+        tenantId: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/OfferingStatus" }
+        machineTypeId: { type: integer, format: int64 }
+        machineTypeName: { type: string }
+        coresMin: { type: integer }
+        coresMax: { type: integer }
+        memoryMbMin: { type: integer }
+        memoryMbMax: { type: integer }
+        diskGbMin: { type: integer }
+        diskGbMax: { type: integer }
+        zoneId: { type: integer, format: int64 }
+        zoneName: { type: string }
+        templateId: { type: integer, format: int64 }
+        templateName: { type: string }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, tenantId, status, machineTypeId, machineTypeName, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, zoneId, zoneName, templateId, templateName]
+    CreateOfferingRequest:
+      type: object
+      properties:
+        tenantId: { type: integer, format: int64 }
+        machineTypeId: { type: integer, format: int64 }
+        zoneId: { type: integer, format: int64 }
+        templateId: { type: integer, format: int64 }
+      required: [tenantId, machineTypeId, zoneId, templateId]
+    UpdateOfferingRequest:
+      type: object
+      description: partial update; omitted fields unchanged
+      properties:
+        status: { $ref: "#/components/schemas/OfferingStatus" }
+    ListOfferingsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Offering" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Customers ----
+    CustomerStatus: { type: string, enum: [active, suspended] }
+    Customer:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        externalRef: { type: string, description: upstream user reference (cheese/microteams user) }
+        status: { $ref: "#/components/schemas/CustomerStatus" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, externalRef, status]
+    CreateCustomerRequest:
+      type: object
+      properties: { externalRef: { type: string } }
+      required: [externalRef]
+    ListCustomersResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Customer" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Fund accounts ----
+    Account:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        customerId: { type: integer, format: int64 }
+        name: { type: string }
+        balance: { type: number, description: "pure number, no currency unit; never negative" }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, customerId, name, balance]
+    CreateAccountRequest:
+      type: object
+      properties:
+        customerId: { type: integer, format: int64 }
+        name: { type: string }
+      required: [customerId, name]
+    TopupAccountRequest:
+      type: object
+      properties:
+        amount: { type: number, description: "amount to add (pure number, same unit as the account)" }
+        remark: { type: string }
+      required: [amount]
+    ListAccountsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Account" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    AccountLedgerEntry:
+      type: object
+      description: one balance change on an account
+      properties:
+        id: { type: integer, format: int64 }
+        accountId: { type: integer, format: int64 }
+        amount: { type: number, description: "signed delta: positive = credit, negative = debit" }
+        balanceBefore: { type: number }
+        balanceAfter: { type: number }
+        remark: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, accountId, amount, balanceBefore, balanceAfter]
+    ListAccountLedgerResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AccountLedgerEntry" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+
+    # ---- Machines (tenant view — no Proxmox internals) ----
+    # Terminal states: running / stopped / deleted / error. Transitional states
+    # (provisioning / starting / stopping / deleting) mean a Proxmox task is in flight; the
+    # operation was accepted and the caller polls GET /machine/{id} until a terminal state.
+    MachineStatus:
+      type: string
+      enum: [provisioning, starting, running, stopping, stopped, deleting, deleted, error]
+    Machine:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        customerId: { type: integer, format: int64 }
+        accountId: { type: integer, format: int64, description: fund account charged for compute }
+        hostname: { type: string }
+        offeringId: { type: integer, format: int64, description: the offering the machine was created from }
+        typeId: { type: integer, format: int64 }
+        zoneId: { type: integer, format: int64, nullable: true }
+        templateId: { type: integer, format: int64 }
+        apiKeyId:
+          type: integer
+          format: int64
+          nullable: true
+          description: the model key whose account the machine's Claude Code bills to (if configured)
+        cores: { type: integer }
+        memoryMb: { type: integer }
+        diskGb: { type: integer }
+        status: { $ref: "#/components/schemas/MachineStatus" }
+        ip: { type: string, nullable: true, description: private IP once assigned }
+        createdAt: { type: string, format: date-time, nullable: true }
+      required: [id, customerId, accountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status]
+    CreateMachineRequest:
+      type: object
+      properties:
+        customerId: { type: integer, format: int64 }
+        accountId: { type: integer, format: int64, description: fund account to charge for compute }
+        hostname: { type: string, description: the machine's hostname }
+        offeringId: { type: integer, format: int64, description: the offering (machine type + zone + template) to provision from }
+        cores: { type: integer, description: "within the offering type's coresMin..coresMax" }
+        memoryMb: { type: integer, description: "within the offering type's memoryMbMin..memoryMbMax" }
+        diskGb: { type: integer, description: "within the offering type's diskGbMin..diskGbMax" }
+        user: { type: string, description: non-root login user to create on the machine }
+        sshPubkey: { type: string, description: SSH public key to authorize for the user }
+        apiKeyId:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            required to configure Claude Code — the pre-created model key whose account the machine's
+            Claude Code usage bills to (create the key first, then the machine)
+      required: [customerId, accountId, hostname, offeringId, cores, memoryMb, diskGb, user]
+    ListMachinesResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Machine" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]

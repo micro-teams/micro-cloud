@@ -93,6 +93,7 @@ def _chown_tree(path: str, name: str) -> None:
 
 
 def grant_sudo_and_docker(name: str) -> None:
+    os.makedirs("/etc/sudoers.d", mode=0o755, exist_ok=True)
     sudoers = f"/etc/sudoers.d/{name}"
     with open(sudoers, "w") as f:
         f.write(f"{name} ALL=(ALL) NOPASSWD:ALL\n")
@@ -126,21 +127,50 @@ def configure_network(interface: str, cidr: str, gateway: str) -> None:
 
 
 def write_ai_config(name: str, base_url: str, token: str) -> None:
-    """newapi relay config, read by Claude Code through the login shell."""
-    old = os.umask(0o077)
-    try:
-        with open("/etc/profile.d/microcloud-ai.sh", "w") as f:
-            f.write(f'export ANTHROPIC_BASE_URL="{base_url}"\n')
-            f.write(f'export ANTHROPIC_AUTH_TOKEN="{token}"\n')
-        home = pwd.getpwnam(name).pw_dir
-        os.makedirs(os.path.join(home, ".claude"), mode=0o700, exist_ok=True)
-        claude_json = os.path.join(home, ".claude.json")
-        with open(claude_json, "w") as f:
-            f.write('{"hasCompletedOnboarding":true}\n')
-        _chown_tree(os.path.join(home, ".claude"), name)
-        os.chown(claude_json, pwd.getpwnam(name).pw_uid, pwd.getpwnam(name).pw_gid)
-    finally:
-        os.umask(old)
+    """newapi relay config, read by Claude Code through the user's login shell.
+
+    Written into the user's OWN home (mode 600, user-owned) — not /etc/profile.d, which a non-root
+    user's login shell cannot read if root-only, and which would expose the token to every user if
+    world-readable. `bash -lc` (how Claude Code launches) sources ~/.profile, which we point at it.
+    """
+    entry = pwd.getpwnam(name)
+    home, uid, gid = entry.pw_dir, entry.pw_uid, entry.pw_gid
+
+    ai_path = os.path.join(home, ".microcloud-ai.sh")
+    with open(ai_path, "w") as f:
+        f.write(f'export ANTHROPIC_BASE_URL="{base_url}"\n')
+        f.write(f'export ANTHROPIC_AUTH_TOKEN="{token}"\n')
+    os.chmod(ai_path, 0o600)
+    os.chown(ai_path, uid, gid)
+
+    # Make the login shell source it (idempotent).
+    profile = os.path.join(home, ".profile")
+    source_line = ". ~/.microcloud-ai.sh"
+    existing = open(profile).read() if os.path.exists(profile) else ""
+    if source_line not in existing:
+        with open(profile, "a") as f:
+            f.write(f"\n{source_line}\n")
+    if os.path.exists(profile):
+        os.chown(profile, uid, gid)
+
+    os.makedirs(os.path.join(home, ".claude"), mode=0o700, exist_ok=True)
+    claude_json = os.path.join(home, ".claude.json")
+    with open(claude_json, "w") as f:
+        f.write('{"hasCompletedOnboarding":true}\n')
+    _chown_tree(os.path.join(home, ".claude"), name)
+    os.chown(claude_json, uid, gid)
+
+
+def install_claude(name: str) -> None:
+    """Install Claude Code for the user via the official installer.
+
+    Not baked into the template (keeps it small); installed here at first boot, on a real running
+    system (the installer's self-install hangs in a chroot but works here). It drops a native binary
+    into the user's ~/.local/bin, which the stock Debian ~/.profile puts on PATH. Run as the user.
+    """
+    log(f"installing Claude Code for {name} (downloads a ~260 MB binary)")
+    run(["sudo", "-u", name, "-H", "bash", "-lc",
+         "curl -fsSL https://claude.ai/install.sh | bash"])
 
 
 def harden() -> None:
@@ -176,6 +206,7 @@ def main(argv: list[str]) -> int:
         configure_network(args.interface, args.ip, args.gateway)
     if args.anthropic_base_url and args.anthropic_token:
         write_ai_config(args.user, args.anthropic_base_url, args.anthropic_token)
+        install_claude(args.user)
     if not args.no_harden:
         harden()
 

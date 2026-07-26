@@ -1,0 +1,274 @@
+/*
+ *  Description: A thin Proxmox VE API client. Talks to a cluster's REST API (`/api2/json/...`) with a
+ *               PVEAPIToken header, and exposes just what the platform needs today: a live inventory
+ *               read (nodes / pools / storages / bridges) used to help configure placements. The
+ *               client is stateless; a caller passes the target cluster's credentials per call.
+ *
+ *  Author(s):
+ *      Nictheboy Li    <nictheboy@outlook.com>
+ *
+ */
+
+package app.microteams.microcloud.machine.proxmox
+
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
+import java.net.URI
+import java.net.URLEncoder
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
+import java.security.cert.X509Certificate
+import java.time.Duration
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import org.rucca.cheese.common.error.BadRequestError
+import org.springframework.stereotype.Component
+
+/** An inventory snapshot read live from a Proxmox cluster. */
+data class ProxmoxInventory(
+    val nodes: List<String>,
+    val pools: List<String>,
+    val storages: List<StorageEntry>,
+    val bridges: List<BridgeEntry>,
+) {
+    data class StorageEntry(val node: String, val storage: String, val content: String)
+
+    data class BridgeEntry(val node: String, val bridge: String, val cidr: String?)
+}
+
+@Component
+class ProxmoxClient(private val objectMapper: ObjectMapper) {
+
+    /** Read nodes, pools, and each node's storages and network bridges from the cluster. */
+    fun readInventory(cluster: ProxmoxCluster): ProxmoxInventory {
+        val nodes = get(cluster, "/nodes").map { it.path("node").asText() }.sorted()
+        val pools = get(cluster, "/pools").map { it.path("poolid").asText() }.sorted()
+
+        val storages = mutableListOf<ProxmoxInventory.StorageEntry>()
+        val bridges = mutableListOf<ProxmoxInventory.BridgeEntry>()
+        for (node in nodes) {
+            get(cluster, "/nodes/$node/storage").forEach {
+                storages.add(
+                    ProxmoxInventory.StorageEntry(
+                        node = node,
+                        storage = it.path("storage").asText(),
+                        content = it.path("content").asText(""),
+                    )
+                )
+            }
+            // type=bridge selects Linux bridges; a bridge may have no address assigned.
+            get(cluster, "/nodes/$node/network?type=bridge").forEach {
+                val cidr = it.path("cidr").asText(null)?.ifBlank { null }
+                bridges.add(
+                    ProxmoxInventory.BridgeEntry(
+                        node = node,
+                        bridge = it.path("iface").asText(),
+                        cidr = cidr,
+                    )
+                )
+            }
+        }
+        return ProxmoxInventory(
+            nodes = nodes,
+            pools = pools,
+            storages = storages,
+            bridges = bridges,
+        )
+    }
+
+    // ---- Template images (used by template upload) ----
+
+    /** Storages on a node that accept `vztmpl` content (where LXC templates live). */
+    fun vztmplStorages(cluster: ProxmoxCluster, node: String): List<String> =
+        get(cluster, "/nodes/$node/storage?content=vztmpl").map { it.path("storage").asText() }
+
+    /**
+     * Ask Proxmox to download a template image from a URL into a storage. Returns the task UPID.
+     */
+    fun downloadTemplateFromUrl(
+        cluster: ProxmoxCluster,
+        node: String,
+        storage: String,
+        filename: String,
+        url: String,
+    ): String =
+        send(
+                cluster,
+                "POST",
+                "/nodes/$node/storage/$storage/download-url",
+                mapOf("content" to "vztmpl", "filename" to filename, "url" to url),
+            )
+            .asText()
+
+    /**
+     * Upload a local template file into a storage via multipart/form-data. Returns the task UPID
+     * (or an empty string if Proxmox answered synchronously). Streams the file, so large images are
+     * fine.
+     */
+    fun uploadTemplateFile(
+        cluster: ProxmoxCluster,
+        node: String,
+        storage: String,
+        filename: String,
+        filePath: String,
+    ): String {
+        val file = java.nio.file.Path.of(filePath)
+        val boundary = "----microcloud" + java.lang.Long.toHexString(file.hashCode().toLong())
+        val head = buildString {
+            append("--$boundary\r\n")
+            append("Content-Disposition: form-data; name=\"content\"\r\n\r\nvztmpl\r\n")
+            append("--$boundary\r\n")
+            append("Content-Disposition: form-data; name=\"filename\"; filename=\"$filename\"\r\n")
+            append("Content-Type: application/octet-stream\r\n\r\n")
+        }
+        val tail = "\r\n--$boundary--\r\n"
+        val body =
+            HttpRequest.BodyPublishers.concat(
+                HttpRequest.BodyPublishers.ofString(head),
+                HttpRequest.BodyPublishers.ofFile(file),
+                HttpRequest.BodyPublishers.ofString(tail),
+            )
+        val base = cluster.apiUrl!!.trimEnd('/')
+        val request =
+            HttpRequest.newBuilder()
+                .uri(URI.create("$base/api2/json/nodes/$node/storage/$storage/upload"))
+                .timeout(Duration.ofMinutes(30))
+                .header("Authorization", "PVEAPIToken=${cluster.tokenId}=${cluster.tokenSecret}")
+                .header("Content-Type", "multipart/form-data; boundary=$boundary")
+                .POST(body)
+                .build()
+        val response =
+            try {
+                clientFor(cluster).send(request, HttpResponse.BodyHandlers.ofString())
+            } catch (e: Exception) {
+                throw BadRequestError("Proxmox upload failed: ${e.message}")
+            }
+        if (response.statusCode() !in 200..299)
+            throw BadRequestError(
+                "Proxmox upload returned ${response.statusCode()}: ${response.body()}"
+            )
+        return objectMapper.readTree(response.body()).path("data").asText("")
+    }
+
+    // ---- LXC lifecycle (used by machine provisioning) ----
+
+    /** Next free VM/CT id in the cluster. */
+    fun nextVmid(cluster: ProxmoxCluster): Int =
+        send(cluster, "GET", "/cluster/nextid", null).asText().toInt()
+
+    /**
+     * Create an LXC container on a node from form params (vmid, ostemplate, rootfs, net0, pool, …).
+     * Returns the UPID of the create task; poll it with [waitForTask].
+     */
+    fun createLxc(cluster: ProxmoxCluster, node: String, params: Map<String, String>): String =
+        send(cluster, "POST", "/nodes/$node/lxc", params).asText()
+
+    fun startLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/lxc/$vmid/status/start", emptyMap()).asText()
+
+    fun stopLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/lxc/$vmid/status/stop", emptyMap()).asText()
+
+    /** Destroy an LXC (purge its config + disks; force even if running). */
+    fun destroyLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "DELETE", "/nodes/$node/lxc/$vmid?purge=1&force=1", null).asText()
+
+    /** Current run state of an LXC: "running" / "stopped" / … */
+    fun lxcStatus(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "GET", "/nodes/$node/lxc/$vmid/status/current", null).path("status").asText()
+
+    /**
+     * Poll a Proxmox task until it stops; throw if it exits non-OK or the timeout elapses. The task
+     * runs on the node embedded in the UPID (`UPID:<node>:...`), which is NOT necessarily the node
+     * the request was sent to — an upload to another node's storage runs on the API node and copies
+     * across — so we always poll the UPID's own node.
+     */
+    fun waitForTask(cluster: ProxmoxCluster, upid: String, timeoutSeconds: Long = 120) {
+        val node =
+            upid.split(":").getOrNull(1)?.takeIf { it.isNotBlank() }
+                ?: throw BadRequestError("malformed Proxmox UPID: $upid")
+        val deadline = timeoutSeconds
+        var waited = 0L
+        while (waited < deadline) {
+            val status = send(cluster, "GET", "/nodes/$node/tasks/$upid/status", null)
+            if (status.path("status").asText() == "stopped") {
+                val exit = status.path("exitstatus").asText("")
+                if (exit != "OK") throw BadRequestError("Proxmox task $upid failed: $exit")
+                return
+            }
+            Thread.sleep(2000)
+            waited += 2
+        }
+        throw BadRequestError("Proxmox task $upid did not finish within ${timeoutSeconds}s")
+    }
+
+    /** GET `/api2/json{path}` and return the elements of the `data` array. */
+    private fun get(cluster: ProxmoxCluster, path: String): List<JsonNode> {
+        val data = send(cluster, "GET", path, null)
+        return if (data.isArray) data.toList() else emptyList()
+    }
+
+    /**
+     * Send a request to `/api2/json{path}` and return the `data` node. A non-null [form] is sent as
+     * an `application/x-www-form-urlencoded` body (Proxmox's expected encoding for writes).
+     */
+    private fun send(
+        cluster: ProxmoxCluster,
+        method: String,
+        path: String,
+        form: Map<String, String>?,
+    ): JsonNode {
+        val base = cluster.apiUrl!!.trimEnd('/')
+        val body =
+            if (form == null) HttpRequest.BodyPublishers.noBody()
+            else HttpRequest.BodyPublishers.ofString(encodeForm(form))
+        val builder =
+            HttpRequest.newBuilder()
+                .uri(URI.create("$base/api2/json$path"))
+                .timeout(Duration.ofSeconds(30))
+                .header("Authorization", "PVEAPIToken=${cluster.tokenId}=${cluster.tokenSecret}")
+                .method(method, body)
+        if (form != null) builder.header("Content-Type", "application/x-www-form-urlencoded")
+        val response =
+            try {
+                clientFor(cluster).send(builder.build(), HttpResponse.BodyHandlers.ofString())
+            } catch (e: Exception) {
+                throw BadRequestError("Proxmox request failed: ${e.message}")
+            }
+        if (response.statusCode() !in 200..299) {
+            throw BadRequestError(
+                "Proxmox returned ${response.statusCode()} for $path: ${response.body()}"
+            )
+        }
+        return objectMapper.readTree(response.body()).path("data")
+    }
+
+    private fun encodeForm(form: Map<String, String>): String =
+        form.entries.joinToString("&") { (k, v) ->
+            "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
+        }
+
+    private fun clientFor(cluster: ProxmoxCluster): HttpClient {
+        val builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
+        if (!cluster.verifyTls) builder.sslContext(insecureSslContext())
+        return builder.build()
+    }
+
+    /** For self-signed Proxmox certs when the operator opted out of TLS verification. */
+    private fun insecureSslContext(): SSLContext {
+        val trustAll =
+            object : X509TrustManager {
+                override fun checkClientTrusted(c: Array<X509Certificate>?, a: String?) {}
+
+                override fun checkServerTrusted(c: Array<X509Certificate>?, a: String?) {}
+
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+        return SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(trustAll), java.security.SecureRandom())
+        }
+    }
+}
