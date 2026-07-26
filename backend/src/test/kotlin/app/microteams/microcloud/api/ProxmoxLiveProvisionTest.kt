@@ -14,7 +14,6 @@
  *                 MICROCLOUD_PVE_POOL         e.g. microcloud-test
  *                 MICROCLOUD_PVE_STORAGE      rootfs storage, e.g. local-lvm
  *                 MICROCLOUD_PVE_BRIDGE       e.g. vmbr0
- *                 MICROCLOUD_PVE_OSTEMPLATE   e.g. local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst
  *                 MICROCLOUD_PVE_IP_START     e.g. 192.168.18.210
  *                 MICROCLOUD_PVE_IP_END       e.g. 192.168.18.211
  *                 MICROCLOUD_PVE_GATEWAY      e.g. 192.168.16.2
@@ -73,24 +72,23 @@ constructor(
     private fun env(name: String, default: String? = null): String =
         System.getenv(name) ?: default ?: error("env $name is required for the live provision test")
 
-    /** Turn real provisioning on for this context only, and feed the fallback ostemplate + SSH. */
+    /** Turn real provisioning on for this context only, and feed the SSH init config. */
     @Suppress("unused")
     companion object {
         @JvmStatic
         @DynamicPropertySource
         fun provisioningProps(registry: DynamicPropertyRegistry) {
-            registry.add("microcloud.provisioning.os-template") {
-                System.getenv("MICROCLOUD_PVE_OSTEMPLATE") ?: ""
-            }
             registry.add("microcloud.provisioning.task-timeout-seconds") { "180" }
-            System.getenv("MICROCLOUD_PVE_SSH_PUBKEY")?.let { v ->
-                registry.add("microcloud.provisioning.root-ssh-public-key") { v }
+            // Default the SSH-init config OFF (empty) unless explicitly provided, so the production
+            // code defaults (which assume /keys/operator) don't leak into this test.
+            registry.add("microcloud.provisioning.root-ssh-public-key") {
+                System.getenv("MICROCLOUD_PVE_SSH_PUBKEY") ?: ""
             }
-            System.getenv("MICROCLOUD_PVE_SSH_KEY_PATH")?.let { v ->
-                registry.add("microcloud.provisioning.ssh-private-key-path") { v }
+            registry.add("microcloud.provisioning.ssh-private-key-path") {
+                System.getenv("MICROCLOUD_PVE_SSH_KEY_PATH") ?: ""
             }
-            System.getenv("MICROCLOUD_PVE_INIT_CMD")?.let { v ->
-                registry.add("microcloud.provisioning.init-command") { v }
+            registry.add("microcloud.provisioning.init-command") {
+                System.getenv("MICROCLOUD_PVE_INIT_CMD") ?: ""
             }
         }
     }
@@ -121,8 +119,9 @@ constructor(
                 )
                 .getString("token")
 
-        // If a template source is given, we upload it to the placement and provision from it;
-        // otherwise we fall back to MICROCLOUD_PVE_OSTEMPLATE.
+        // Set MICROCLOUD_PVE_TEMPLATE_SOURCE: the template is uploaded to the placement, then
+        // machines provision from it (a machine can only be created where its template is
+        // uploaded).
         templateId =
             templateRepository
                 .save(

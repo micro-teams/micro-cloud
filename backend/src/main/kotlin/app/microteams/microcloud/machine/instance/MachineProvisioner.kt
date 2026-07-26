@@ -55,16 +55,19 @@ class MachineProvisioner(
             val cluster = proxmoxService.getCluster(placement.clusterId!!)
             val node = placement.node!!
 
+            // createMachine only lands on a placement where the template is DONE-uploaded, so this
+            // always resolves; the throw is a defensive guard.
             val ostemplate =
                 templateUploadRepository
                     .findByTemplateIdAndPlacementId(machine.templateId!!, machine.placementId!!)
                     .filter { it.status == TemplateUploadStatus.DONE && it.volid != null }
                     .map { it.volid!! }
-                    .orElse(config.provisioning.osTemplate?.takeIf { it.isNotBlank() })
-                    ?: throw IllegalStateException(
-                        "no uploaded template image for template ${machine.templateId} on " +
-                            "placement ${machine.placementId}, and no fallback osTemplate configured"
-                    )
+                    .orElseThrow {
+                        IllegalStateException(
+                            "template ${machine.templateId} is not uploaded to placement " +
+                                "${machine.placementId}"
+                        )
+                    }
 
             val vmid = proxmoxClient.nextVmid(cluster)
             val params = buildMap {
@@ -84,9 +87,7 @@ class MachineProvisioner(
                 )
                 put("pool", placement.pool!!)
                 put("password", randomPassword())
-                config.provisioning.rootSshPublicKey
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { put("ssh-public-keys", it) }
+                operatorPublicKey()?.let { put("ssh-public-keys", it) }
                 put("start", "1")
             }
 
@@ -182,6 +183,22 @@ class MachineProvisioner(
     }
 
     /** Run init-machine.py inside the fresh container over SSH-as-root, if configured. */
+    /**
+     * The operator root public key injected into new containers: the configured value, or (default)
+     * read from `${sshPrivateKeyPath}.pub`. Null when neither is available (no SSH init).
+     */
+    private fun operatorPublicKey(): String? {
+        config.provisioning.rootSshPublicKey
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                return it
+            }
+        val keyPath =
+            config.provisioning.sshPrivateKeyPath?.takeIf { it.isNotBlank() } ?: return null
+        val pub = java.io.File("$keyPath.pub")
+        return if (pub.isFile) pub.readText().trim().ifBlank { null } else null
+    }
+
     private fun runInit(machine: Machine, gateway: String) {
         val command = config.provisioning.initCommand?.takeIf { it.isNotBlank() } ?: return
         val keyPath = config.provisioning.sshPrivateKeyPath?.takeIf { it.isNotBlank() } ?: return
