@@ -38,7 +38,13 @@ enum class TemplateUploadStatus {
 @SQLRestriction("deleted_at IS NULL")
 @Table(
     name = "machine_template",
-    indexes = [Index(name = "idx_template_name", columnList = "name", unique = true)],
+    // Identity is (name, kind), NOT name alone: the same OS name exists once per kind (e.g. a
+    // `debian13` LXC template AND a `debian13` VM template, laid out as templates/lxc/debian13 and
+    // templates/vm/debian13). A name-only unique constraint would make the two collide — the dir
+    // scan would clobber one with the other.
+    indexes = [Index(name = "idx_template_name", columnList = "name")],
+    uniqueConstraints =
+        [UniqueConstraint(name = "uk_template_name_kind", columnNames = ["name", "kind"])],
 )
 class MachineTemplate(
     @Column(nullable = false) var name: String? = null,
@@ -55,7 +61,7 @@ class MachineTemplate(
 ) : BaseEntity()
 
 interface MachineTemplateRepository : JpaRepository<MachineTemplate, IdType> {
-    fun findByName(name: String): Optional<MachineTemplate>
+    fun findByNameAndKind(name: String, kind: MachineTemplateKind): Optional<MachineTemplate>
 }
 
 @Entity
