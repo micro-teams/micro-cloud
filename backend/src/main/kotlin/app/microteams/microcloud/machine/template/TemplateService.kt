@@ -13,7 +13,9 @@ package app.microteams.microcloud.machine.template
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
 import app.microteams.microcloud.common.helper.PageHelper
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.placement.PlacementService
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.model.*
 import jakarta.annotation.PostConstruct
 import org.rucca.cheese.common.error.NotFoundError
@@ -28,11 +30,7 @@ fun MachineTemplate.toDTO() =
         id = this.id!!,
         name = this.name!!,
         description = this.description,
-        kind =
-            when (this.kind) {
-                MachineTemplateKind.LXC -> MachineTemplateDTO.Kind.lxc
-                MachineTemplateKind.VM -> MachineTemplateDTO.Kind.vm
-            },
+        kind = this.kind.wire,
         status =
             when (this.status) {
                 MachineTemplateStatus.ACTIVE -> MachineTemplateStatusDTO.active
@@ -95,10 +93,14 @@ class TemplateService(
             .filter { it.isFile }
             .forEach { file ->
                 val name = file.parentFile?.name ?: file.nameWithoutExtension
+                // The kind directory (grandparent) maps to a Proxmox MachineKind: templates/lxc/…
+                // ->
+                // proxmox/lxc, templates/vm/… -> proxmox/vm. (Proxmox is the only provider today; a
+                // future provider would extend the layout + this mapping.)
                 val kind =
                     when (file.parentFile?.parentFile?.name?.lowercase()) {
-                        "vm" -> MachineTemplateKind.VM
-                        else -> MachineTemplateKind.LXC
+                        "vm" -> MachineKind.PROXMOX_VM
+                        else -> MachineKind.PROXMOX_LXC
                     }
                 val source =
                     when {
@@ -143,8 +145,14 @@ class TemplateService(
      * and drives it to DONE/ERROR. Idempotent per (template, placement).
      */
     fun startUpload(templateId: IdType, placementId: IdType): TemplateUploadDTO {
-        getTemplate(templateId) // 404 guard
-        placementService.getPlacement(placementId) // 404 guard
+        val template = getTemplate(templateId) // 404 guard
+        val placement = placementService.getPlacement(placementId) // 404 guard
+        // A template can only be uploaded to a placement that hosts its kind.
+        if (template.kind != placement.effectiveKind)
+            throw org.rucca.cheese.common.error.BadRequestError(
+                "template ${template.kind.wire} cannot be uploaded to a " +
+                    "${placement.effectiveKind.wire} placement"
+            )
         val upload =
             uploadRepository.findByTemplateIdAndPlacementId(templateId, placementId).orElseGet {
                 TemplateUpload(templateId = templateId, placementId = placementId)

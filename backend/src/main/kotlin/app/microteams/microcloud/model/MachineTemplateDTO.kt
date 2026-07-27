@@ -1,15 +1,14 @@
 package app.microteams.microcloud.model
 
-import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonValue
 import io.swagger.v3.oas.annotations.media.Schema
 import javax.validation.Valid
 
 /**
  * @param id
  * @param name stable identifier, e.g. debian13
- * @param kind
+ * @param kind the image's provider + machine form, e.g. proxmox/lxc or proxmox/vm; usable only on a
+ *   placement of the same kind
  * @param status
  * @param description
  * @param createdAt
@@ -21,9 +20,14 @@ data class MachineTemplateDTO(
     @Schema(example = "null", required = true, description = "stable identifier, e.g. debian13")
     @get:JsonProperty("name", required = true)
     val name: kotlin.String,
-    @Schema(example = "null", required = true, description = "")
+    @Schema(
+        example = "proxmox/lxc",
+        required = true,
+        description =
+            "the image's provider + machine form, e.g. proxmox/lxc or proxmox/vm; usable only on a placement of the same kind",
+    )
     @get:JsonProperty("kind", required = true)
-    val kind: MachineTemplateDTO.Kind,
+    val kind: kotlin.String,
     @field:Valid
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("status", required = true)
@@ -34,20 +38,4 @@ data class MachineTemplateDTO(
     @Schema(example = "null", description = "")
     @get:JsonProperty("createdAt")
     val createdAt: java.time.OffsetDateTime? = null,
-) {
-
-    /** Values: lxc,vm */
-    enum class Kind(@get:JsonValue val value: kotlin.String) {
-
-        lxc("lxc"),
-        vm("vm");
-
-        companion object {
-            @JvmStatic
-            @JsonCreator
-            fun forValue(value: kotlin.String): Kind {
-                return values().first { it -> it.value == value }
-            }
-        }
-    }
-}
+) {}

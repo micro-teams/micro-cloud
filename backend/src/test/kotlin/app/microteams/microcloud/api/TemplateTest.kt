@@ -11,8 +11,8 @@
 
 package app.microteams.microcloud.api
 
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.template.MachineTemplate
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import org.json.JSONObject
 import org.junit.jupiter.api.BeforeAll
@@ -67,7 +67,7 @@ constructor(
                 .save(
                     MachineTemplate(
                         name = "debian13-test-${System.nanoTime()}",
-                        kind = MachineTemplateKind.LXC,
+                        kind = MachineKind.PROXMOX_LXC,
                     )
                 )
                 .id!!
@@ -91,7 +91,7 @@ constructor(
                         .header("Authorization", "Bearer $adminToken")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(
-                            """{"name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
+                            """{"kind":"proxmox/lxc","name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
                         )
                 )
                 .andReturn()

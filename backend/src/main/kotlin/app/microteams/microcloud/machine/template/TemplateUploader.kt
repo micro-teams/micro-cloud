@@ -19,9 +19,11 @@
 package app.microteams.microcloud.machine.template
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
@@ -65,9 +67,17 @@ class TemplateUploader(
             val placement = placementService.getPlacement(upload.placementId!!)
             val cluster = proxmoxService.getCluster(placement.clusterId!!)
 
+            // A template can only live on a placement of the same kind (an LXC rootfs can't be a VM
+            // template, and vice-versa). startUpload already guards this, but re-check defensively.
+            if (template.kind != placement.effectiveKind)
+                throw IllegalStateException(
+                    "template ${template.id} kind ${template.kind.wire} does not match placement " +
+                        "${placement.id} kind ${placement.effectiveKind.wire}"
+                )
+
             when (template.kind) {
-                MachineTemplateKind.LXC -> uploadLxc(upload, template, source, placement, cluster)
-                MachineTemplateKind.VM -> bakeVm(upload, template, source, placement, cluster)
+                MachineKind.PROXMOX_LXC -> uploadLxc(upload, template, source, placement, cluster)
+                MachineKind.PROXMOX_VM -> bakeVm(upload, template, source, placement, cluster)
             }
 
             upload.status = TemplateUploadStatus.DONE

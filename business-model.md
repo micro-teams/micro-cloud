@@ -32,11 +32,12 @@ MicroCloud deliberately splits its model into two layers.
 This separation exists for two reasons:
 
 1. **Flexibility for compute providers.** Because callers only touch the logical layer, MicroCloud
-   can back a "machine type" with different substrates without any change to the caller's code. This
-   is already real: a template's **kind** (`lxc` / `vm`) decides whether a machine is a Proxmox LXC
-   container or a full Proxmox VM, and the tenant sees no difference. The same seam leaves room for
-   an **external cloud** instance or a lighter **plain-Docker** host later. The physical layer is an
-   implementation detail behind the abstraction.
+   can back a "machine type" with different substrates without any change to the caller's code. The
+   seam is the **placement's kind** — its leading coordinate `provider/form` (`proxmox/lxc`,
+   `proxmox/vm`, …). This is already real: a Proxmox LXC and a Proxmox VM are just two placement
+   kinds, and the tenant sees no difference. The same seam leaves room for an **external cloud**
+   instance or a lighter **plain-Docker** host later — each is a new kind + a provisioner branch.
+   The physical layer is an implementation detail behind the abstraction.
 2. **A simple, clear, easy-to-use interface for callers.** A tenant reasons about "a *standard-4c*
    machine in the *cn-east* zone from the *debian13* template", not about clusters, nodes, pools,
    storages, bridges, and volume IDs. The complexity of the physical world stays on the operator's
@@ -77,9 +78,13 @@ type + one zone + one template.
 
 - **Proxmox cluster** — a provider credential: an API URL + API token. The token secret is
   write-only (never returned). One MicroCloud can drive several clusters.
-- **Placement** — a concrete landing coordinate on a cluster: `cluster + node + pool + storage`. A
-  machine is ultimately created into some placement. *Example:* `pve119 / pool=microcloud /
-  storage=local-lvm`.
+- **Placement** — a concrete landing coordinate, led by its **kind** — the provider + machine form
+  it hosts (`proxmox/lxc`, `proxmox/vm`, and later e.g. `somecloud/…`) — followed by the
+  provider-specific location (`cluster + node + pool + storage` for Proxmox). A machine is created
+  into some placement, and the kind is the authoritative source for *how* it is provisioned (the
+  provisioner dispatches on it). This is the seam for new compute providers: a new provider/form is
+  a new placement kind + a provisioner branch, and everything above the placement stays
+  kind-agnostic. *Example:* `proxmox/lxc @ pve119 / pool=microcloud / storage=local-lvm`.
 - **Network** — an IPv4 range bound to a placement (`start–end`, gateway, prefix, bridge). Machines
   in that placement lease a private IP from it. Purely internal — tenants have **no** network
   concept; MicroCloud picks the address automatically.
@@ -89,13 +94,13 @@ type + one zone + one template.
 - **Zone** — a locality partition over placements (machines in the same zone communicate faster). A
   zone is a set of placements. *Example:* `cn-east` = the placements physically in one datacenter.
 - **Template** — a catalog machine image (e.g. `debian13`, our Debian 13 + Docker image) with a
-  **kind** (`lxc` or `vm`) that fixes the machine form. Templates are made available per-placement
-  ("uploaded"); a machine can only be created on a placement where its template is present. What
-  "uploaded" means depends on kind: an **LXC** template's rootfs tarball is copied onto the
-  placement's storage; a **VM** template is *baked* on the placement — MicroCloud boots the base
-  cloud image once, installs Docker, and saves it as a Proxmox VM template that later machines are
-  cloned from. Everything above the template (types, zones, offerings, the machine flow) is
-  kind-agnostic.
+  **kind** (`proxmox/lxc`, `proxmox/vm`) — the image's format — that must match the kind of any
+  placement it is used on. Templates are made available per-placement ("uploaded"); a machine can
+  only be created on a placement of the same kind where its template is present. What "uploaded"
+  means depends on kind: an **LXC** template's rootfs tarball is copied onto the placement's storage;
+  a **VM** template is *baked* on the placement — MicroCloud boots the base cloud image once,
+  installs Docker, and saves it as a Proxmox VM template that later machines are cloned from.
+  Everything above the template (types, zones, offerings, the machine flow) is kind-agnostic.
 
 ### The bridge: offerings
 

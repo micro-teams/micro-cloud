@@ -14,15 +14,16 @@
 package app.microteams.microcloud.machine.instance
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.network.Network
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
@@ -53,6 +54,10 @@ class MachineProvisioner(
     private fun clusterOf(machine: Machine): ProxmoxCluster =
         proxmoxService.getCluster(placementService.getPlacement(machine.placementId!!).clusterId!!)
 
+    /** The machine's kind = the kind of the placement it lives on (the authoritative source). */
+    private fun kindOf(machine: Machine): MachineKind =
+        placementService.getPlacement(machine.placementId!!).effectiveKind
+
     /** Kick off provisioning in the background; the caller's create returns immediately. */
     @Async
     @Transactional
@@ -77,15 +82,20 @@ class MachineProvisioner(
                         )
                     }
 
-            when (machine.effectiveKind) {
-                MachineTemplateKind.LXC ->
+            when (placement.effectiveKind) {
+                MachineKind.PROXMOX_LXC ->
                     provisionLxc(machine, upload, placement, network, cluster)
-                MachineTemplateKind.VM -> provisionVm(machine, upload, placement, network, cluster)
+                MachineKind.PROXMOX_VM -> provisionVm(machine, upload, placement, network, cluster)
             }
 
             machine.status = MachineStatus.RUNNING
             machineRepository.save(machine)
-            log.info("machine {} is RUNNING ({}{})", machine.id, machine.kind, machine.vmid)
+            log.info(
+                "machine {} is RUNNING ({} {})",
+                machine.id,
+                placement.effectiveKind.wire,
+                machine.vmid,
+            )
         } catch (e: Exception) {
             log.error("provisioning machine {} failed: {}", machineId, e.message, e)
             machine.status = MachineStatus.ERROR
@@ -255,9 +265,9 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.RUNNING) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.effectiveKind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.startLxc(cluster, node, it)
-                        MachineTemplateKind.VM -> proxmoxClient.startVm(cluster, node, it)
+                    when (kindOf(machine)) {
+                        MachineKind.PROXMOX_LXC -> proxmoxClient.startLxc(cluster, node, it)
+                        MachineKind.PROXMOX_VM -> proxmoxClient.startVm(cluster, node, it)
                     }
                 proxmoxClient.waitForTask(cluster, upid, timeout())
             }
@@ -270,9 +280,9 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.effectiveKind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.stopLxc(cluster, node, it)
-                        MachineTemplateKind.VM -> proxmoxClient.stopVm(cluster, node, it)
+                    when (kindOf(machine)) {
+                        MachineKind.PROXMOX_LXC -> proxmoxClient.stopLxc(cluster, node, it)
+                        MachineKind.PROXMOX_VM -> proxmoxClient.stopVm(cluster, node, it)
                     }
                 proxmoxClient.waitForTask(cluster, upid, timeout())
             }
@@ -285,18 +295,19 @@ class MachineProvisioner(
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
         try {
             machine.vmid?.let { vmid ->
-                val cluster = clusterOf(machine)
-                val node = placementService.getPlacement(machine.placementId!!).node!!
-                when (machine.effectiveKind) {
+                val placement = placementService.getPlacement(machine.placementId!!)
+                val cluster = proxmoxService.getCluster(placement.clusterId!!)
+                val node = placement.node!!
+                when (placement.effectiveKind) {
                     // pct destroy --purge --force tears down a running CT in one shot.
-                    MachineTemplateKind.LXC ->
+                    MachineKind.PROXMOX_LXC ->
                         proxmoxClient.waitForTask(
                             cluster,
                             proxmoxClient.destroyLxc(cluster, node, vmid),
                             timeout(),
                         )
                     // qm destroy refuses a running VM, so stop it first.
-                    MachineTemplateKind.VM ->
+                    MachineKind.PROXMOX_VM ->
                         proxmoxClient.destroyVmGracefully(cluster, node, vmid, timeout())
                 }
             }

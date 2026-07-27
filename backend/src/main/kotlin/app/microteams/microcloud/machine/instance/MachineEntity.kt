@@ -11,7 +11,6 @@
 
 package app.microteams.microcloud.machine.instance
 
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import jakarta.persistence.*
 import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
@@ -44,17 +43,10 @@ class Machine(
     @Column(name = "type_id", nullable = false) var typeId: IdType? = null,
     @Column(name = "zone_id") var zoneId: IdType? = null,
     @Column(name = "template_id", nullable = false) var templateId: IdType? = null,
-    // Which Proxmox form this machine takes (from its template's kind), chosen at create. Only the
-    // provisioner branches on it (pct vs qm); the tenant-facing model stays kind-agnostic, so it is
-    // deliberately absent from MachineDTO. Nullable in the schema so it can be added to an existing
-    // machine table without a backfill; a null legacy row is read as LXC.
-    // Nullable both in the DB (so it can be added to an existing machine table without a backfill)
-    // AND in Kotlin: a legacy row created before this column existed loads as null, and Hibernate
-    // injects that null past Kotlin's type check — so the property MUST be nullable or every read
-    // (e.g. `when (kind)`) would NPE. Read it through [effectiveKind], which treats null as LXC.
-    @Enumerated(EnumType.STRING)
-    @Column(name = "kind")
-    var kind: MachineTemplateKind? = MachineTemplateKind.LXC,
+    // The machine's form (proxmox/lxc, proxmox/vm) is NOT stored here — it is a property of the
+    // placement the machine landed on (Placement.kind, the authoritative dispatch source). The
+    // provisioner resolves it via placementId. (An older revision stored kind on the machine; that
+    // column is now unused and harmless if it lingers on an existing DB.)
     @Column(name = "api_key_id") var apiKeyId: IdType? = null,
     @Column(nullable = false) var cores: Int? = null,
     @Column(name = "memory_mb", nullable = false) var memoryMb: Int? = null,
@@ -70,10 +62,6 @@ class Machine(
     @Column(nullable = false)
     var status: MachineStatus = MachineStatus.PROVISIONING,
 ) : BaseEntity()
-
-/** The machine's form, treating a legacy null (row predating the `kind` column) as LXC. */
-val Machine.effectiveKind: MachineTemplateKind
-    get() = this.kind ?: MachineTemplateKind.LXC
 
 interface MachineRepository : JpaRepository<Machine, IdType> {
     fun findByTenantId(tenantId: IdType): List<Machine>

@@ -225,9 +225,10 @@ function adminNav(token: string): NavItem[] {
       render: () => (
         <ResourcePanel
           title="Placements"
-          description="A landing coordinate: cluster + node + pool + storage."
+          description="A landing coordinate: kind (proxmox/lxc | proxmox/vm) + cluster + node + pool + storage."
           columns={[
             { key: "id", label: "id" },
+            { key: "kind", label: "kind" },
             { key: "name", label: "name" },
             { key: "clusterId", label: "cluster" },
             { key: "node", label: "node" },
@@ -237,11 +238,12 @@ function adminNav(token: string): NavItem[] {
           ]}
           load={list(token, "/machine/placement")}
           createFields={[
+            { name: "kind", label: "kind", placeholder: "proxmox/lxc" },
             { name: "name", label: "name" },
             { name: "clusterId", label: "clusterId", type: "number" },
             { name: "node", label: "node" },
             { name: "pool", label: "pool" },
-            { name: "storage", label: "storage (rootfs)", placeholder: "local-lvm" },
+            { name: "storage", label: "storage (rootfs / disk)", placeholder: "local-lvm" },
           ]}
           onCreate={create(token, "/machine/placement")}
           actions={[{ label: "delete", confirm: "Delete?", run: del(token, "/machine/placement") }]}

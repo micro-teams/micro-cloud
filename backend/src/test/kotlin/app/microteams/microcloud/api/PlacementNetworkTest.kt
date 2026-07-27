@@ -79,7 +79,7 @@ constructor(
                     .header("Authorization", "Bearer $adminToken")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(
-                        """{"name":"p","clusterId":999999,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
+                        """{"kind":"proxmox/lxc","name":"p","clusterId":999999,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
                     )
             )
             .andExpect(status().isNotFound)
@@ -95,10 +95,11 @@ constructor(
                         .header("Authorization", "Bearer $adminToken")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(
-                            """{"name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
+                            """{"kind":"proxmox/lxc","name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}"""
                         )
                 )
                 .andExpect(status().isCreated)
+                .andExpect(jsonPath("$.kind").value("proxmox/lxc"))
                 .andExpect(jsonPath("$.clusterId").value(clusterId))
                 .andExpect(jsonPath("$.status").value("active"))
                 .andReturn()

@@ -906,26 +906,38 @@ components:
     PlacementStatus: { type: string, enum: [active, disabled] }
     Placement:
       type: object
-      description: a concrete cluster+node+pool+storage coordinate machines can land on
+      description: >-
+        a concrete landing coordinate machines can be created on. Its leading coordinate is the
+        `kind` — the provider + machine form it hosts (proxmox/lxc, proxmox/vm, …) — followed by the
+        provider-specific location (cluster+node+pool+storage for Proxmox). A machine can only be
+        created here from a template of the same kind.
       properties:
         id: { type: integer, format: int64 }
+        kind:
+          type: string
+          description: "provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm"
+          example: proxmox/lxc
         name: { type: string }
         clusterId: { type: integer, format: int64 }
         node: { type: string }
         pool: { type: string }
-        storage: { type: string, description: "storage for the machine rootfs, e.g. local-lvm" }
+        storage: { type: string, description: "storage for the machine rootfs / disk, e.g. local-lvm" }
         status: { $ref: "#/components/schemas/PlacementStatus" }
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, name, clusterId, node, pool, storage, status]
+      required: [id, kind, name, clusterId, node, pool, storage, status]
     CreatePlacementRequest:
       type: object
       properties:
+        kind:
+          type: string
+          description: "provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm"
+          example: proxmox/lxc
         name: { type: string }
         clusterId: { type: integer, format: int64 }
         node: { type: string }
         pool: { type: string }
         storage: { type: string }
-      required: [name, clusterId, node, pool, storage]
+      required: [kind, name, clusterId, node, pool, storage]
     UpdatePlacementRequest:
       type: object
       description: partial update; omitted fields unchanged
@@ -1083,7 +1095,10 @@ components:
         id: { type: integer, format: int64 }
         name: { type: string, description: "stable identifier, e.g. debian13" }
         description: { type: string, nullable: true }
-        kind: { type: string, enum: [lxc, vm] }
+        kind:
+          type: string
+          description: "the image's provider + machine form, e.g. proxmox/lxc or proxmox/vm; usable only on a placement of the same kind"
+          example: proxmox/lxc
         status: { $ref: "#/components/schemas/MachineTemplateStatus" }
         createdAt: { type: string, format: date-time, nullable: true }
       required: [id, name, kind, status]
