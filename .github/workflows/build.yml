@@ -165,7 +165,15 @@ jobs:
           mkdir -p "$STAGE/templates/lxc/debian13"
           cp artifacts/lxc-template/debian13-microcloud.tar.zst "$STAGE/templates/lxc/debian13/"
           cp templates/lxc/debian13/init-machine.py "$STAGE/templates/lxc/debian13/"
-          chmod +x "$STAGE/gen-env.sh" "$STAGE/templates/lxc/debian13/init-machine.py"
+          # The VM template has no prebuilt image artifact — the base cloud image is downloaded and
+          # baked into a Proxmox VM template per placement at runtime — so it ships as its three
+          # descriptor files: image-url (base image URL), build.sh (bake customization), and
+          # init-machine.py (per-machine setup piped over SSH).
+          mkdir -p "$STAGE/templates/vm/debian13"
+          cp templates/vm/debian13/image-url templates/vm/debian13/build.sh \
+             templates/vm/debian13/init-machine.py "$STAGE/templates/vm/debian13/"
+          chmod +x "$STAGE/gen-env.sh" "$STAGE/templates/lxc/debian13/init-machine.py" \
+             "$STAGE/templates/vm/debian13/build.sh" "$STAGE/templates/vm/debian13/init-machine.py"
           echo "== bundle contents =="; find "$STAGE" -maxdepth 3 -type f | sort
       - uses: actions/upload-artifact@v4
         with:

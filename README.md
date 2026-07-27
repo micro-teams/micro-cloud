@@ -51,7 +51,8 @@ flowchart TD
   api-keys, billing, audit. Interfaces are **generated** from `MicroCloud-API.yml`.
 - **newapi** — our fork [`micro-teams/new-api`](https://github.com/micro-teams/new-api) (release
   `v1.0.0-rc.21`): the LLM relay + per-key quota/metering. MicroCloud orchestrates its admin API.
-- **Proxmox VE** — provisions the Debian 13 LXC (`templates/lxc/debian13/`) with Claude Code installed.
+- **Proxmox VE** — provisions the Debian 13 machine, as an LXC container (`templates/lxc/debian13/`)
+  or a full VM (`templates/vm/debian13/`) depending on the template's kind.
 - **Postgres** — MicroCloud's own schema `microcloud`.
 
 ## What is here
@@ -61,7 +62,8 @@ flowchart TD
 | **`MicroCloud-API.yml`** | The single API contract. Backend interfaces and the frontend client are both generated from it. |
 | **`backend/`** | Kotlin / Spring Boot. The borrowed authorization framework keeps its `org.rucca.cheese.auth` package; everything else is `app.microteams.microcloud`. |
 | **`frontend/`** | Minimal React + Vite test SPA — calls only the public API that upstreams also use (no extra backend). |
-| **`templates/lxc/debian13/`** | The v1 machine template, as stdlib-Python routines the service calls: `build.py` (packages the template tarball) + `init-machine.py` (initializes a provisioned machine) + `files/`. |
+| **`templates/lxc/debian13/`** | The LXC machine template, as stdlib-Python routines the service calls: `build.py` (packages the template tarball) + `init-machine.py` (initializes a provisioned machine) + `files/`. |
+| **`templates/vm/debian13/`** | The VM machine template: an `image-url` (base cloud image) + `build.sh` (baked into a Proxmox VM template: Docker + docker group) + `init-machine.py` (per-machine setup, piped over SSH after cloud-init). |
 | **`deploy/`** | docker-compose (nginx + backend + newapi + postgres), bind-mounted stock images. |
 
 ## Build & run

@@ -74,28 +74,39 @@ class TemplateService(
     }
 
     /**
-     * Enumerate the templates directory and upsert a catalog entry per `*.tar.zst` image found: the
-     * template name is the image's parent directory, the kind is its grandparent (`lxc`/`vm`), and
-     * the source is the image's path (used when uploading it to a placement). So an operator just
-     * drops a template into the directory and it appears in the catalog — no config needed.
+     * Enumerate the templates directory and upsert a catalog entry per template descriptor found. A
+     * template's name is its directory, its kind is that directory's parent (`lxc` / `vm`), and its
+     * `source` is what the uploader consumes:
+     * - **LXC** — a rootfs image `*.tar.zst`; `source` is the image's path (uploaded as a vztmpl).
+     * - **VM** — a text file named `image-url` holding the base cloud image's http(s) URL; `source`
+     *   is that URL (the uploader downloads it, then bakes a VM template — see [TemplateUploader]).
+     *
+     * So an operator just drops a template into the directory and it appears in the catalog — no
+     * config needed. Non-descriptor files (build scripts, READMEs) are ignored.
      */
     fun syncFromDir() {
         val root = java.io.File(config.templatesDir)
         if (!root.isDirectory) return
         root
             .walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".tar.zst") }
-            .forEach { image ->
-                val name = image.parentFile?.name ?: image.nameWithoutExtension
+            .filter { it.isFile }
+            .forEach { file ->
+                val name = file.parentFile?.name ?: file.nameWithoutExtension
                 val kind =
-                    when (image.parentFile?.parentFile?.name?.lowercase()) {
+                    when (file.parentFile?.parentFile?.name?.lowercase()) {
                         "vm" -> MachineTemplateKind.VM
                         else -> MachineTemplateKind.LXC
                     }
+                val source =
+                    when {
+                        file.name.endsWith(".tar.zst") -> file.absolutePath
+                        file.name == "image-url" -> file.readText().trim().ifBlank { null }
+                        else -> null
+                    } ?: return@forEach
                 val template =
                     templateRepository.findByName(name).orElseGet { MachineTemplate(name = name) }
                 template.kind = kind
-                template.source = image.absolutePath
+                template.source = source
                 templateRepository.save(template)
             }
     }

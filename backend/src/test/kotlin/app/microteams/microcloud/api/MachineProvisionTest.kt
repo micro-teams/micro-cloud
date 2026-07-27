@@ -227,6 +227,22 @@ constructor(
     }
 
     @Test
+    @Order(1)
+    fun invalidHostnameIsRejected() {
+        // Underscores / spaces aren't valid RFC1123 hostnames -> 400 up front, not an async ERROR.
+        val body =
+            """{"customerId":$customerId,"accountId":$accountId,"hostname":"bad_host name","offeringId":$offeringId,"cores":2,"memoryMb":2048,"diskGb":20,"user":"dev","sshPubkey":"ssh-ed25519 AAAA dev"}"""
+        mockMvc
+            .perform(
+                post("/machine")
+                    .header("Authorization", "Bearer $secret")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body)
+            )
+            .andExpect(status().isBadRequest)
+    }
+
+    @Test
     @Order(2)
     fun crossTenantAccountIsRejected() {
         // The other tenant cannot provision against this tenant's customer/account (404 on lookup).
