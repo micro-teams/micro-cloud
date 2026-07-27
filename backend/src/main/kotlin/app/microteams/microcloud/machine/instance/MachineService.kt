@@ -73,8 +73,20 @@ class MachineService(
     private val networkService: NetworkService,
     private val templateUploadRepository:
         app.microteams.microcloud.machine.template.TemplateUploadRepository,
+    private val templateRepository:
+        app.microteams.microcloud.machine.template.MachineTemplateRepository,
     private val provisioner: MachineProvisioner,
 ) {
+    private companion object {
+        // RFC1123 hostname: dot-separated labels of [a-zA-Z0-9-], no leading/trailing hyphen, each
+        // label ≤63, whole name ≤253. Matches what Proxmox accepts for a CT hostname / VM name.
+        val HOSTNAME_RE =
+            Regex(
+                "^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)" +
+                    "(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+            )
+    }
+
     fun getMachine(tenantId: IdType, id: IdType): Machine {
         val machine = machineRepository.findById(id).orElseThrow { NotFoundError("machine", id) }
         if (machine.tenantId != tenantId) throw NotFoundError("machine", id)
@@ -92,6 +104,19 @@ class MachineService(
     }
 
     fun createMachine(tenantId: IdType, request: CreateMachineRequestDTO): MachineDTO {
+        // The hostname is honored verbatim as BOTH the Proxmox object name (pct `hostname` / qm VM
+        // `name`) and the guest's internal hostname (LXC sets it directly; a VM's cloud-init
+        // derives
+        // it from the VM name). Proxmox/DNS can't represent every string, so reject anything that
+        // isn't a valid RFC1123 hostname up front (a clean 400) instead of letting the async worker
+        // fail against Proxmox. Labels are letters/digits/hyphens (no leading/trailing hyphen, ≤63
+        // each), dot-separated, ≤253 total — notably NO underscores or spaces.
+        if (!HOSTNAME_RE.matches(request.hostname))
+            throw BadRequestError(
+                "hostname must be a valid RFC1123 hostname: dot-separated labels of letters, " +
+                    "digits and hyphens (no leading/trailing hyphen, ≤63 chars each, ≤253 total; " +
+                    "no underscores or spaces)"
+            )
         // Ownership: the customer and account must belong to the calling tenant (404 otherwise).
         customerService.getCustomer(tenantId, request.customerId)
         accountService.getAccount(tenantId, request.accountId)
@@ -106,6 +131,15 @@ class MachineService(
         val (placementId, network) =
             selectPlacementAndNetwork(type, offering.zoneId!!, offering.templateId!!)
 
+        // The machine's form (LXC / VM) is fixed by its template's kind; the provisioner branches
+        // on
+        // it. The tenant-facing model stays kind-agnostic (kind is not in MachineDTO).
+        val kind =
+            templateRepository
+                .findById(offering.templateId!!)
+                .map { it.kind }
+                .orElse(app.microteams.microcloud.machine.template.MachineTemplateKind.LXC)
+
         // Flush the insert so @CreationTimestamp is assigned before we mutate + save again for the
         // IP.
         val machine =
@@ -119,6 +153,7 @@ class MachineService(
                     typeId = type.id!!,
                     zoneId = offering.zoneId,
                     templateId = offering.templateId,
+                    kind = kind,
                     apiKeyId = request.apiKeyId,
                     cores = request.cores,
                     memoryMb = request.memoryMb,

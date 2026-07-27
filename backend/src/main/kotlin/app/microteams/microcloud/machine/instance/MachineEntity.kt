@@ -11,6 +11,7 @@
 
 package app.microteams.microcloud.machine.instance
 
+import app.microteams.microcloud.machine.template.MachineTemplateKind
 import jakarta.persistence.*
 import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
@@ -43,6 +44,13 @@ class Machine(
     @Column(name = "type_id", nullable = false) var typeId: IdType? = null,
     @Column(name = "zone_id") var zoneId: IdType? = null,
     @Column(name = "template_id", nullable = false) var templateId: IdType? = null,
+    // Which Proxmox form this machine takes (from its template's kind), chosen at create. Only the
+    // provisioner branches on it (pct vs qm); the tenant-facing model stays kind-agnostic, so it is
+    // deliberately absent from MachineDTO. Nullable in the schema so it can be added to an existing
+    // machine table without a backfill; a null legacy row is read as LXC.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind")
+    var kind: MachineTemplateKind = MachineTemplateKind.LXC,
     @Column(name = "api_key_id") var apiKeyId: IdType? = null,
     @Column(nullable = false) var cores: Int? = null,
     @Column(name = "memory_mb", nullable = false) var memoryMb: Int? = null,

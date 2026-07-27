@@ -55,9 +55,35 @@ class MicroCloudConfig {
          */
         var initCommand: String? =
             "python3 /root/init-machine.py --user '{user}' --ssh-pubkey '{sshPubkey}'"
+        /**
+         * Remote command for VM init. Unlike LXC (root SSH + baked script), a VM's login user is
+         * created by cloud-init at clone (with the login user's key + the operator key + a static
+         * IP), and the backend then SSHes in AS THE LOGIN USER with the operator key and pipes
+         * `templates/vm/<template>/init-machine.py` to this command (`-` reads the script from
+         * stdin) to install per-user software (Claude Code, …) and finish setup. `{user}`
+         * {sshPubkey} are substituted. No `--ip`: cloud-init already set the address. Blank skips
+         * VM init (the machine is still cloned + booted + reachable). The `sudo` uses the login
+         * user's passwordless sudo that cloud-init grants.
+         */
+        var vmInitCommand: String? = "sudo python3 - --user '{user}' --ssh-pubkey '{sshPubkey}'"
         /** How long to wait for a Proxmox create/start task to finish. */
         var taskTimeoutSeconds: Long = 180
         /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
         var sshReadyTimeoutSeconds: Long = 120
+
+        // ---- VM template baking (see TemplateUploader) ----
+        /**
+         * The cloud-init login user created in the throwaway VM while baking a VM template. The
+         * backend SSHes in as this user (with the operator key) to run the template's build.sh.
+         */
+        var vmBakeUser: String = "mcbake"
+        /** CPU cores / RAM (MiB) for the throwaway bake VM (small; it only runs apt + a script). */
+        var vmBakeCores: Int = 2
+        var vmBakeMemoryMb: Int = 2048
+        /**
+         * Overall budget for the bake's long-running steps: the base-image download, and running
+         * build.sh (apt install Docker) over SSH. Proxmox short tasks use [taskTimeoutSeconds].
+         */
+        var vmBakeTimeoutSeconds: Long = 1800
     }
 }

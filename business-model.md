@@ -8,9 +8,10 @@
 ## What MicroCloud is
 
 MicroCloud turns compute infrastructure (today: Proxmox VE) into a simple self-service API: an
-upstream service's users get real machines (today: Debian 13 LXC containers with Docker, reachable
-over SSH on a private network), billed against prepaid fund accounts. It is multi-tenant: each
-upstream service is a **tenant**, and each tenant has its own end-users.
+upstream service's users get real machines (Debian 13 with Docker, reachable over SSH on a private
+network — as either a lightweight **LXC container** or a full **VM**, chosen per template), billed
+against prepaid fund accounts. It is multi-tenant: each upstream service is a **tenant**, and each
+tenant has its own end-users.
 
 In one line: MicroCloud is a **base service / IaaS control plane**, not traditional middleware — a
 self-contained, stateful, async service that upstreams call over REST to provision and bill machines,
@@ -30,11 +31,12 @@ MicroCloud deliberately splits its model into two layers.
 
 This separation exists for two reasons:
 
-1. **Flexibility for future compute providers.** Because callers only touch the logical layer,
-   MicroCloud can later back a "machine type" with something other than a Proxmox LXC — a Proxmox
-   **VM**, an **external cloud** instance, or a lighter **plain-Docker** host that doesn't need PVE
-   at all — without any change to the caller's code. The physical layer is an implementation detail
-   behind the abstraction.
+1. **Flexibility for compute providers.** Because callers only touch the logical layer, MicroCloud
+   can back a "machine type" with different substrates without any change to the caller's code. This
+   is already real: a template's **kind** (`lxc` / `vm`) decides whether a machine is a Proxmox LXC
+   container or a full Proxmox VM, and the tenant sees no difference. The same seam leaves room for
+   an **external cloud** instance or a lighter **plain-Docker** host later. The physical layer is an
+   implementation detail behind the abstraction.
 2. **A simple, clear, easy-to-use interface for callers.** A tenant reasons about "a *standard-4c*
    machine in the *cn-east* zone from the *debian13* template", not about clusters, nodes, pools,
    storages, bridges, and volume IDs. The complexity of the physical world stays on the operator's
@@ -86,9 +88,14 @@ type + one zone + one template.
   backed by placements on `pve119` and `pve25`.
 - **Zone** — a locality partition over placements (machines in the same zone communicate faster). A
   zone is a set of placements. *Example:* `cn-east` = the placements physically in one datacenter.
-- **Template** — a catalog machine image (e.g. `debian13`, our Debian 13 + Docker + Claude Code
-  image). Templates are uploaded per-placement (the image is copied onto that placement's storage);
-  a machine can only be created on a placement where its template is present.
+- **Template** — a catalog machine image (e.g. `debian13`, our Debian 13 + Docker image) with a
+  **kind** (`lxc` or `vm`) that fixes the machine form. Templates are made available per-placement
+  ("uploaded"); a machine can only be created on a placement where its template is present. What
+  "uploaded" means depends on kind: an **LXC** template's rootfs tarball is copied onto the
+  placement's storage; a **VM** template is *baked* on the placement — MicroCloud boots the base
+  cloud image once, installs Docker, and saves it as a Proxmox VM template that later machines are
+  cloned from. Everything above the template (types, zones, offerings, the machine flow) is
+  kind-agnostic.
 
 ### The bridge: offerings
 

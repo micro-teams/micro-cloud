@@ -34,7 +34,8 @@ constructor(
     @Value("\${microcloud.superadmin-password}") private val superadminPassword: String,
 ) {
     companion object {
-        // A temp templates dir with one lxc image: <dir>/lxc/debian-x/debian-x.tar.zst
+        // A temp templates dir with one lxc image (<dir>/lxc/debian-x/debian-x.tar.zst) and one vm
+        // descriptor (<dir>/vm/debian-vm/image-url holding the base image URL).
         @JvmStatic
         @DynamicPropertySource
         fun templatesDir(registry: DynamicPropertyRegistry) {
@@ -42,6 +43,12 @@ constructor(
             val img = dir.resolve("lxc").resolve("debian-x").resolve("debian-x.tar.zst")
             Files.createDirectories(img.parent)
             Files.writeString(img, "not-a-real-image")
+            val vmDesc = dir.resolve("vm").resolve("debian-vm").resolve("image-url")
+            Files.createDirectories(vmDesc.parent)
+            Files.writeString(
+                vmDesc,
+                "https://example.invalid/debian-13-genericcloud-amd64.qcow2\n",
+            )
             registry.add("microcloud.templates-dir") { dir.toString() }
         }
     }
@@ -67,5 +74,7 @@ constructor(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.items[?(@.name=='debian-x')]").exists())
             .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='lxc')]").exists())
+            // The vm/ descriptor (image-url) is enumerated too, as a vm-kind template.
+            .andExpect(jsonPath("$.items[?(@.name=='debian-vm' && @.kind=='vm')]").exists())
     }
 }

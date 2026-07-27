@@ -67,7 +67,11 @@ class TemplateUpload(
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     var status: TemplateUploadStatus = TemplateUploadStatus.PENDING,
+    // How the uploaded template is referenced on this placement, per kind:
+    //  - LXC: `volid` holds the vztmpl volume id (e.g. `local:vztmpl/debian13.tar.zst`).
+    //  - VM:  `templateVmid` holds the id of the baked Proxmox VM template on the placement's node.
     @Column(name = "volid") var volid: String? = null,
+    @Column(name = "template_vmid") var templateVmid: Int? = null,
     @Column(name = "job_log", length = 4096) var jobLog: String? = null,
 ) : BaseEntity()
 

@@ -153,6 +153,91 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         return objectMapper.readTree(response.body()).path("data").asText("")
     }
 
+    // ---- VM images + lifecycle (used by VM template baking and VM provisioning) ----
+
+    /** Storages on a node that accept `import` content (where a VM base image is downloaded to). */
+    fun importStorages(cluster: ProxmoxCluster, node: String): List<String> =
+        get(cluster, "/nodes/$node/storage?content=import").map { it.path("storage").asText() }
+
+    /**
+     * Ask Proxmox to download a VM base image (e.g. a cloud qcow2) from a URL into an
+     * import-capable storage. Returns the task UPID.
+     */
+    fun downloadImportImage(
+        cluster: ProxmoxCluster,
+        node: String,
+        storage: String,
+        filename: String,
+        url: String,
+    ): String =
+        send(
+                cluster,
+                "POST",
+                "/nodes/$node/storage/$storage/download-url",
+                mapOf("content" to "import", "filename" to filename, "url" to url),
+            )
+            .asText()
+
+    /** Create a QEMU VM on a node from form params (vmid, scsi0, ide2, net0, ciuser, …). UPID. */
+    fun createVm(cluster: ProxmoxCluster, node: String, params: Map<String, String>): String =
+        send(cluster, "POST", "/nodes/$node/qemu", params).asText()
+
+    /** Full-clone a VM/template into a new vmid on the same node. Returns the clone task UPID. */
+    fun cloneVm(
+        cluster: ProxmoxCluster,
+        node: String,
+        sourceVmid: Int,
+        params: Map<String, String>,
+    ): String = send(cluster, "POST", "/nodes/$node/qemu/$sourceVmid/clone", params).asText()
+
+    /** Update a VM's config (cloud-init ciuser / sshkeys / ipconfig0, cores, memory, …). Sync. */
+    fun setVmConfig(cluster: ProxmoxCluster, node: String, vmid: Int, params: Map<String, String>) {
+        send(cluster, "PUT", "/nodes/$node/qemu/$vmid/config", params)
+    }
+
+    /** Grow a VM disk, e.g. disk=`scsi0`, size=`20G`. Sync. */
+    fun resizeVmDisk(cluster: ProxmoxCluster, node: String, vmid: Int, disk: String, size: String) {
+        send(
+            cluster,
+            "PUT",
+            "/nodes/$node/qemu/$vmid/resize",
+            mapOf("disk" to disk, "size" to size),
+        )
+    }
+
+    /** Convert a stopped VM into a template. Returns the task UPID. */
+    fun templateVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/template", emptyMap()).asText()
+
+    fun startVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/start", emptyMap()).asText()
+
+    fun stopVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/stop", emptyMap()).asText()
+
+    /** Destroy a VM (purge its config + disks, including unreferenced ones). */
+    fun destroyVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(
+                cluster,
+                "DELETE",
+                "/nodes/$node/qemu/$vmid?purge=1&destroy-unreferenced-disks=1",
+                null,
+            )
+            .asText()
+
+    /** Current run state of a VM: "running" / "stopped" / … */
+    fun vmStatus(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "GET", "/nodes/$node/qemu/$vmid/status/current", null).path("status").asText()
+
+    /**
+     * Encode an SSH public key for the QEMU `sshkeys` cloud-init param, which Proxmox requires to
+     * be URL-encoded ONCE by the caller (space as `%20`, not `+`). The transport form-encoding in
+     * [send] then encodes it a second time, and Proxmox decodes exactly one layer — matching what
+     * Proxmox stores. (LXC's `ssh-public-keys` takes the raw key and is NOT pre-encoded.)
+     */
+    fun sshkeysParam(pubkey: String): String =
+        URLEncoder.encode(pubkey, StandardCharsets.UTF_8).replace("+", "%20")
+
     // ---- LXC lifecycle (used by machine provisioning) ----
 
     /** Next free VM/CT id in the cluster. */

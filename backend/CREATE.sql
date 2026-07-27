@@ -217,6 +217,12 @@ CREATE
             ssh_pubkey VARCHAR(4096),
             hostname VARCHAR(255) NOT NULL,
             ip VARCHAR(255),
+            kind VARCHAR(255) CHECK(
+                kind IN(
+                    'LXC',
+                    'VM'
+                )
+            ),
             login_user VARCHAR(255) NOT NULL,
             status VARCHAR(255) NOT NULL CHECK(
                 status IN(
@@ -378,6 +384,7 @@ CREATE
 CREATE
     TABLE
         microcloud.template_upload(
+            template_vmid INTEGER,
             created_at TIMESTAMP(6) NOT NULL,
             deleted_at TIMESTAMP(6),
             id BIGINT NOT NULL,
