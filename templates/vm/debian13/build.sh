@@ -13,6 +13,14 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# The base cloud image's first-boot cloud-init runs its own apt (Proxmox sets package_upgrade), which
+# holds the dpkg/apt lock. MicroCloud SSHes in as soon as TCP :22 is up — possibly while that apt is
+# still running — so wait for cloud-init to finish before our own apt, or `apt-get` fails to take the
+# lock ("Could not get lock /var/lib/apt/lists/lock"). `|| true`: a degraded/errored cloud-init still
+# means its apt is done, and we'd rather proceed than abort the bake.
+echo "[build] waiting for first-boot cloud-init to finish..."
+cloud-init status --wait >/dev/null 2>&1 || true
+
 # --- Docker, via Docker's official apt repository (the standard Debian install flow) ---
 apt-get update
 apt-get install -y ca-certificates curl
