@@ -217,12 +217,6 @@ CREATE
             ssh_pubkey VARCHAR(4096),
             hostname VARCHAR(255) NOT NULL,
             ip VARCHAR(255),
-            kind VARCHAR(255) CHECK(
-                kind IN(
-                    'LXC',
-                    'VM'
-                )
-            ),
             login_user VARCHAR(255) NOT NULL,
             status VARCHAR(255) NOT NULL CHECK(
                 status IN(
@@ -248,12 +242,7 @@ CREATE
             updated_at TIMESTAMP(6) NOT NULL,
             SOURCE VARCHAR(1024),
             description VARCHAR(255),
-            kind VARCHAR(255) NOT NULL CHECK(
-                kind IN(
-                    'LXC',
-                    'VM'
-                )
-            ),
+            kind VARCHAR(255) NOT NULL,
             name VARCHAR(255) NOT NULL,
             status VARCHAR(255) NOT NULL CHECK(
                 status IN(
@@ -350,6 +339,7 @@ CREATE
             deleted_at TIMESTAMP(6),
             id BIGINT NOT NULL,
             updated_at TIMESTAMP(6) NOT NULL,
+            kind VARCHAR(255),
             name VARCHAR(255) NOT NULL,
             node VARCHAR(255) NOT NULL,
             pool VARCHAR(255) NOT NULL,

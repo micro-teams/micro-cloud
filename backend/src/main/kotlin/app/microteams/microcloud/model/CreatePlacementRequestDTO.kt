@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
 
 /**
+ * @param kind provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm
  * @param name
  * @param clusterId
  * @param node
@@ -11,6 +12,13 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param storage
  */
 data class CreatePlacementRequestDTO(
+    @Schema(
+        example = "proxmox/lxc",
+        required = true,
+        description = "provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm",
+    )
+    @get:JsonProperty("kind", required = true)
+    val kind: kotlin.String,
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("name", required = true)
     val name: kotlin.String,

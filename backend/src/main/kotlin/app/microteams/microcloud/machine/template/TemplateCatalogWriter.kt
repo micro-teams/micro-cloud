@@ -12,6 +12,7 @@
 
 package app.microteams.microcloud.machine.template
 
+import app.microteams.microcloud.machine.MachineKind
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -21,7 +22,7 @@ class TemplateCatalogWriter(private val templateRepository: MachineTemplateRepos
 
     /** Upsert the (name, kind) template with its source, in an isolated transaction. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun upsert(name: String, kind: MachineTemplateKind, source: String) {
+    fun upsert(name: String, kind: MachineKind, source: String) {
         val template =
             templateRepository.findByNameAndKind(name, kind).orElseGet {
                 MachineTemplate(name = name, kind = kind)

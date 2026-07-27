@@ -86,6 +86,35 @@ Until you do, LXC keeps working and the backend just logs `skipping template VM/
 template appears in the catalog as soon as the old constraint is gone. Fresh deployments ship the
 correct schema and need none of this.
 
+### Upgrading to the placement-kind release (one-time)
+
+Placements now lead with a `kind` (`proxmox/lxc` / `proxmox/vm`) — the provider + machine form they
+host — which is the authoritative source the provisioner dispatches on. `ddl-auto=update` just adds
+the new nullable `placement.kind` column; nothing breaks, because a legacy row (null kind) is read
+as `proxmox/lxc` (every placement created before this column existed was a Proxmox LXC one). No
+manual step is required.
+
+`kind` values are now written as `proxmox/lxc` / `proxmox/vm` (previously `machine_template.kind`
+stored `LXC` / `VM`). The backend reads the legacy values fine, but an old **CHECK constraint** that
+Hibernate had put on `machine_template.kind` (`CHECK (kind IN ('LXC','VM'))`) would reject the new
+values — so **registering a VM template (or rewriting any template's kind) fails on an upgraded DB
+until that check is dropped**:
+
+```sql
+ALTER TABLE microcloud.machine_template DROP CONSTRAINT IF EXISTS machine_template_kind_check;
+```
+
+Recommended (so existing placements report their kind explicitly and are unambiguous going forward):
+
+```sql
+UPDATE microcloud.placement SET kind = 'proxmox/lxc' WHERE kind IS NULL;
+```
+
+Note this release also drops `machine.kind` (kind is now a property of the placement, not the
+machine). `ddl-auto` never drops columns, so the old `machine.kind` column simply lingers unused on
+an existing DB — harmless; drop it by hand if you want it gone. Fresh deployments ship the correct
+schema and need none of this.
+
 ## Provisioning (reaching Proxmox and the machines)
 
 The backend talks to the Proxmox API and, to initialize each new container, SSHes into it on the

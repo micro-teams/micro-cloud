@@ -77,7 +77,7 @@ constructor(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.items[?(@.name=='debian-x')]").exists())
             // Same name under both kinds coexists as two distinct rows (identity is name+kind).
-            .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='lxc')]").exists())
-            .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='vm')]").exists())
+            .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='proxmox/lxc')]").exists())
+            .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='proxmox/vm')]").exists())
     }
 }

@@ -21,6 +21,7 @@ import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.offering.OfferingService
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.PlacementStatus
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.type.MachineType
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
@@ -131,14 +132,8 @@ class MachineService(
         val (placementId, network) =
             selectPlacementAndNetwork(type, offering.zoneId!!, offering.templateId!!)
 
-        // The machine's form (LXC / VM) is fixed by its template's kind; the provisioner branches
-        // on
-        // it. The tenant-facing model stays kind-agnostic (kind is not in MachineDTO).
-        val kind =
-            templateRepository
-                .findById(offering.templateId!!)
-                .map { it.kind }
-                .orElse(app.microteams.microcloud.machine.template.MachineTemplateKind.LXC)
+        // The machine's form (proxmox/lxc, proxmox/vm) follows from the placement it lands on; the
+        // provisioner reads it from the placement. Nothing kind-related is stored on the machine.
 
         // Flush the insert so @CreationTimestamp is assigned before we mutate + save again for the
         // IP.
@@ -153,7 +148,6 @@ class MachineService(
                     typeId = type.id!!,
                     zoneId = offering.zoneId,
                     templateId = offering.templateId,
-                    kind = kind,
                     apiKeyId = request.apiKeyId,
                     cores = request.cores,
                     memoryMb = request.memoryMb,
@@ -183,10 +177,15 @@ class MachineService(
         templateId: IdType,
     ): Pair<IdType, IdType> {
         val zone = zoneService.getZone(zoneId)
+        val templateKind = templateRepository.findById(templateId).map { it.kind }.orElse(null)
         val candidateIds = type.placementIds.filter { it in zone.placementIds }
         for (placementId in candidateIds) {
             val placement = placementService.getPlacement(placementId)
             if (placement.status != PlacementStatus.ACTIVE) continue
+            // The placement must host the template's kind (an LXC template can't run on a VM
+            // placement). This is normally implied — a template only uploads to matching-kind
+            // placements — but enforce it explicitly during selection.
+            if (templateKind != null && placement.effectiveKind != templateKind) continue
             val uploaded =
                 templateUploadRepository
                     .findByTemplateIdAndPlacementId(templateId, placementId)
