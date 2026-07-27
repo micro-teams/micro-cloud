@@ -11,6 +11,8 @@
 
 package app.microteams.microcloud.machine.instance
 
+import app.microteams.microcloud.machine.ai.AiMode
+import app.microteams.microcloud.machine.ai.AiStatus
 import jakarta.persistence.*
 import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
@@ -58,6 +60,16 @@ class Machine(
     @Column(name = "login_user", nullable = false) var loginUser: String? = null,
     @Column(name = "ssh_pubkey", length = 4096) var sshPubkey: String? = null,
     @Column var ip: String? = null,
+    // How this machine's Claude Code gets model access, tracked ORTHOGONALLY to `status` (the AI
+    // can
+    // be provisioning/ready/errored while the machine itself is RUNNING). Nullable for migration:
+    // a legacy row reads null (= no AI).
+    @Enumerated(EnumType.STRING) @Column(name = "ai_mode") var aiMode: AiMode? = AiMode.NONE,
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ai_status")
+    var aiStatus: AiStatus? = AiStatus.DISABLED,
+    /** The newapi token id issued for this machine (NEWAPI mode), kept for teardown. */
+    @Column(name = "newapi_token_id") var newapiTokenId: Int? = null,
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     var status: MachineStatus = MachineStatus.PROVISIONING,

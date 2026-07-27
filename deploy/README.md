@@ -57,6 +57,18 @@ provisioning out of the box. (Advanced: the defaults can be overridden by adding
 `MICROCLOUD_PROVISIONING_*` env to the backend — e.g. set `microcloud.provisioning.init-command`
 blank to skip SSH init — but you don't need to.)
 
+**AI (Claude Code model access) needs no manual wiring.** Every machine defaults to **newapi** — a
+per-machine relay token, fully automatic. `gen-env.sh` generates `NEWAPI_ROOT_PASSWORD` and derives
+`NEWAPI_MACHINE_BASE_URL` (`http://<this-host-ip>:<port>/newapi`, reached through the gateway since
+machines are outside the compose network); the backend initializes newapi with that root password on
+first use, logs in, and mints tokens — no access tokens or URLs to configure. If
+`NEWAPI_MACHINE_BASE_URL` was guessed wrong (NAT / public domain), edit it in `.env`.
+
+Two things remain manual, both **inside newapi's own UI** (not MicroCloud): configure an upstream
+model **channel** (Anthropic, DeepSeek, …, with the provider key), and top up quota if needed.
+MicroCloud only mints/deletes per-machine tokens. (ccproxy — the subscription-backed alternative for
+heavy users — is a separate super-admin switch, not covered here.)
+
 ## Upgrades & the schema (`CREATE.sql`)
 
 The backend creates/updates its own tables on boot via Hibernate `ddl-auto=update`. That is fine for

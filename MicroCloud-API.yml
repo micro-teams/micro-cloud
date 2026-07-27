@@ -1274,8 +1274,16 @@ components:
         diskGb: { type: integer }
         status: { $ref: "#/components/schemas/MachineStatus" }
         ip: { type: string, nullable: true, description: private IP once assigned }
+        aiMode:
+          type: string
+          description: "how this machine's Claude Code gets model access: none | newapi | ccproxy"
+          example: newapi
+        aiStatus:
+          type: string
+          description: "AI setup state, independent of `status`: disabled | provisioning | ready | error"
+          example: ready
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, customerId, accountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status]
+      required: [id, customerId, accountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status, aiMode, aiStatus]
     CreateMachineRequest:
       type: object
       properties:
@@ -1292,9 +1300,7 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: >
-            required to configure Claude Code — the pre-created model key whose account the machine's
-            Claude Code usage bills to (create the key first, then the machine)
+          description: "(legacy, optional) a pre-created model key to bind; superseded by aiMode"
       required: [customerId, accountId, hostname, offeringId, cores, memoryMb, diskGb, user]
     ListMachinesResponse:
       type: object

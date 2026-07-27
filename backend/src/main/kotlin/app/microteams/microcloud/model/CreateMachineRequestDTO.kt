@@ -13,8 +13,7 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param diskGb within the offering type's diskGbMin..diskGbMax
  * @param user non-root login user to create on the machine
  * @param sshPubkey SSH public key to authorize for the user
- * @param apiKeyId required to configure Claude Code — the pre-created model key whose account the
- *   machine's Claude Code usage bills to (create the key first, then the machine)
+ * @param apiKeyId (legacy, optional) a pre-created model key to bind; superseded by aiMode
  */
 data class CreateMachineRequestDTO(
     @Schema(example = "null", required = true, description = "")
@@ -66,8 +65,7 @@ data class CreateMachineRequestDTO(
     val sshPubkey: kotlin.String? = null,
     @Schema(
         example = "null",
-        description =
-            "required to configure Claude Code — the pre-created model key whose account the machine's Claude Code usage bills to (create the key first, then the machine) ",
+        description = "(legacy, optional) a pre-created model key to bind; superseded by aiMode",
     )
     @get:JsonProperty("apiKeyId")
     val apiKeyId: kotlin.Long? = null,

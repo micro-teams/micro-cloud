@@ -34,6 +34,37 @@ class MicroCloudConfig {
     /** Proxmox provisioning knobs (credentials come from each cluster, not here). */
     var provisioning: Provisioning = Provisioning()
 
+    /**
+     * newapi relay integration — the default AI mode. newapi runs at a fixed address inside the
+     * compose bundle, so the only setting is a root password (gen-env.sh generates it); the backend
+     * bootstraps newapi itself. When the root password is absent, machines simply get no AI.
+     */
+    var newapi: Newapi = Newapi()
+
+    class Newapi {
+        /** newapi admin API base, reachable from the backend. Fixed compose service by default. */
+        var adminBaseUrl: String? = "http://newapi:3000"
+        /**
+         * What a machine's `ANTHROPIC_BASE_URL` points at (newapi's Anthropic-compatible endpoint),
+         * as reachable FROM the machines (which live outside the compose network) — e.g.
+         * `http://<host>:<gateway-port>/newapi`, set by gen-env.sh.
+         */
+        var machineBaseUrl: String? = null
+        /**
+         * newapi's root password — the ONLY newapi secret MicroCloud needs. gen-env.sh generates it
+         * and passes it to both newapi and the backend; the backend uses it to initialize + log in
+         * to newapi and mint tokens. Blank = newapi not wired (machines get no AI).
+         */
+        var rootPassword: String? = null
+        /**
+         * Quota minted on each per-machine token, in newapi's internal units (500000 ≈ $1). Must be
+         * large enough that newapi's per-request PRE-consume check (which estimates on the model's
+         * price × max_tokens — a single Claude-Opus turn estimates ~$5) doesn't block the machine.
+         * Defaults to ~$100 — the buffer the metering design tops up/settles against later.
+         */
+        var defaultQuota: Long = 50_000_000
+    }
+
     // These default to the shipped bundle's layout (gen-env.sh generates ./keys/operator, compose
     // mounts it at /keys), so provisioning works with zero manual configuration. Override only for
     // a
