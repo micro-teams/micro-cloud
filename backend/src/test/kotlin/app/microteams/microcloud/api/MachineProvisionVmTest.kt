@@ -197,11 +197,36 @@ constructor(
                 .andExpect(jsonPath("$.status").value("provisioning"))
                 .andExpect(jsonPath("$.ip").value("10.8.0.10"))
                 .andReturn()
-        JSONObject(res.response.contentAsString).getLong("id")
+        val machineId = JSONObject(res.response.contentAsString).getLong("id")
 
         // The async worker takes the VM branch: it clones the baked template and never touches the
         // LXC path.
         verify(timeout = 5000) { proxmoxClient.cloneVm(any(), eq("pve"), eq(9000), any()) }
         verify(exactly = 0) { proxmoxClient.createLxc(any(), any(), any()) }
+
+        // Wait until provisioning finished (the machine has a vmid to act on), then delete it: the
+        // VM branch must go through destroyVmGracefully (which stops a running VM before
+        // destroying,
+        // since qm destroy refuses a running VM) — never the LXC destroy path.
+        waitForStatus(machineId, "running", secret)
+        mockMvc
+            .perform(delete("/machine/$machineId").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        verify(timeout = 5000) { proxmoxClient.destroyVmGracefully(any(), eq("pve"), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
+    }
+
+    private fun waitForStatus(id: Long, status: String, secret: String) {
+        repeat(50) {
+            val body =
+                mockMvc
+                    .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                    .andReturn()
+                    .response
+                    .contentAsString
+            if (runCatching { JSONObject(body).getString("status") }.getOrNull() == status) return
+            Thread.sleep(100)
+        }
+        error("machine $id did not reach $status in time")
     }
 }

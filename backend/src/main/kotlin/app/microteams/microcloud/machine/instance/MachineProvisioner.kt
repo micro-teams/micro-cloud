@@ -287,12 +287,18 @@ class MachineProvisioner(
             machine.vmid?.let { vmid ->
                 val cluster = clusterOf(machine)
                 val node = placementService.getPlacement(machine.placementId!!).node!!
-                val upid =
-                    when (machine.effectiveKind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.destroyLxc(cluster, node, vmid)
-                        MachineTemplateKind.VM -> proxmoxClient.destroyVm(cluster, node, vmid)
-                    }
-                proxmoxClient.waitForTask(cluster, upid, timeout())
+                when (machine.effectiveKind) {
+                    // pct destroy --purge --force tears down a running CT in one shot.
+                    MachineTemplateKind.LXC ->
+                        proxmoxClient.waitForTask(
+                            cluster,
+                            proxmoxClient.destroyLxc(cluster, node, vmid),
+                            timeout(),
+                        )
+                    // qm destroy refuses a running VM, so stop it first.
+                    MachineTemplateKind.VM ->
+                        proxmoxClient.destroyVmGracefully(cluster, node, vmid, timeout())
+                }
             }
             networkService.releaseIpsFor(machine.id!!)
             machineRepository.delete(machine) // soft delete

@@ -218,8 +218,13 @@ class TemplateUploader(
             bakeVmid = null // succeeded — keep it as the template, don't destroy it
             log.info("VM template {} baked as VM{}", template.id, vmid)
         } catch (e: Exception) {
-            // On failure, tear the throwaway VM down so a retry starts clean.
-            bakeVmid?.let { runCatching { proxmoxClient.destroyVm(cluster, node, it) } }
+            // On failure, tear the throwaway VM down so a retry starts clean. It is likely still
+            // running, and qm destroy refuses a running VM, so stop-then-destroy.
+            bakeVmid?.let {
+                runCatching {
+                    proxmoxClient.destroyVmGracefully(cluster, node, it, prov.taskTimeoutSeconds)
+                }
+            }
             throw e
         } finally {
             networkService.releaseIpsFor(bakeLeaseId)
