@@ -6,10 +6,14 @@ A base service that, given **Proxmox** and **newapi**, provisions machines with 
 each has its own users, and MicroCloud owns the mapping from `(tenant, external user)` to accounts
 and quota.
 
-> Status: **skeleton**. This repo was seeded from the [MicroTeams](https://github.com/micro-teams/micro-teams)
-> monorepo with its business logic stripped, the backend package renamed
-> `app.microteams` → `app.microteams.microcloud`, and only a minimal authenticated `/ping` endpoint
-> kept. The design lives in the team doc tree under `tech/microcloud/` and `design/microcloud/`.
+> **What it is:** a platform-layer **base service / IaaS control plane** — not traditional
+> middleware. Upstream services call its REST API to provision and bill machines; it abstracts the
+> physical compute provider (today Proxmox) behind a small logical surface (offerings / machines),
+> sitting between callers and compute providers as a provider-abstraction layer. It is a
+> self-contained, stateful, async control plane — not a library or broker on the request hot path —
+> which is also what lets it back other providers later (Proxmox VMs, external clouds, a lighter
+> plain-Docker host with no PVE). The design lives in the team doc tree under `tech/microcloud/` and
+> `design/microcloud/`.
 
 ## Integrators & contributors — read these first
 
