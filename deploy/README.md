@@ -65,6 +65,27 @@ tables that already hold rows. `CREATE.sql` in the bundle root is the exact sche
 expects — keep the file from each release and diff them to see what changed, so on an upgrade you can
 hand-write the SQL migration (e.g. backfill a new NOT-NULL column) before starting the new backend.
 
+### Upgrading to the VM-support release (one-time)
+
+This release adds VM machines alongside LXC. Two schema changes, both handled cleanly by
+`ddl-auto=update` (no action needed): the new **nullable** columns `machine.kind` and
+`template_upload.template_vmid` are just added; existing machines keep `kind = NULL`, which the
+backend reads as LXC.
+
+There is **one manual step, but only if you are upgrading a deployment that already has templates**:
+a template's identity changed from `name` to `(name, kind)`, so the same OS name can exist once as
+LXC and once as VM (e.g. `debian13` for both). `ddl-auto` adds the new `uk_template_name_kind`
+constraint but does **not** drop the old name-only unique constraint, which would block the VM
+template from registering. Drop it once (Hibernate has already added the replacement):
+
+```sql
+ALTER TABLE microcloud.machine_template DROP CONSTRAINT idx_template_name;
+```
+
+Until you do, LXC keeps working and the backend just logs `skipping template VM/<name>` — the VM
+template appears in the catalog as soon as the old constraint is gone. Fresh deployments ship the
+correct schema and need none of this.
+
 ## Provisioning (reaching Proxmox and the machines)
 
 The backend talks to the Proxmox API and, to initialize each new container, SSHes into it on the

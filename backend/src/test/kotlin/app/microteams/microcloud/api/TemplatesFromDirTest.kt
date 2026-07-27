@@ -34,8 +34,11 @@ constructor(
     @Value("\${microcloud.superadmin-password}") private val superadminPassword: String,
 ) {
     companion object {
-        // A temp templates dir with one lxc image (<dir>/lxc/debian-x/debian-x.tar.zst) and one vm
-        // descriptor (<dir>/vm/debian-vm/image-url holding the base image URL).
+        // A temp templates dir with the SAME name under both kinds:
+        // <dir>/lxc/debian-x/debian-x.tar.zst
+        // and <dir>/vm/debian-x/image-url. Identity is (name, kind), so both must appear as
+        // distinct
+        // catalog rows — neither clobbers the other.
         @JvmStatic
         @DynamicPropertySource
         fun templatesDir(registry: DynamicPropertyRegistry) {
@@ -43,7 +46,7 @@ constructor(
             val img = dir.resolve("lxc").resolve("debian-x").resolve("debian-x.tar.zst")
             Files.createDirectories(img.parent)
             Files.writeString(img, "not-a-real-image")
-            val vmDesc = dir.resolve("vm").resolve("debian-vm").resolve("image-url")
+            val vmDesc = dir.resolve("vm").resolve("debian-x").resolve("image-url")
             Files.createDirectories(vmDesc.parent)
             Files.writeString(
                 vmDesc,
@@ -73,8 +76,8 @@ constructor(
             .perform(get("/machine/template").header("Authorization", "Bearer $token"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.items[?(@.name=='debian-x')]").exists())
+            // Same name under both kinds coexists as two distinct rows (identity is name+kind).
             .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='lxc')]").exists())
-            // The vm/ descriptor (image-url) is enumerated too, as a vm-kind template.
-            .andExpect(jsonPath("$.items[?(@.name=='debian-vm' && @.kind=='vm')]").exists())
+            .andExpect(jsonPath("$.items[?(@.name=='debian-x' && @.kind=='vm')]").exists())
     }
 }

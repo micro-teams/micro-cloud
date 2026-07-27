@@ -65,8 +65,11 @@ class TemplateService(
     private val uploadRepository: TemplateUploadRepository,
     private val placementService: PlacementService,
     private val templateUploader: TemplateUploader,
+    private val catalogWriter: TemplateCatalogWriter,
     private val config: MicroCloudConfig,
 ) {
+    private val log = org.slf4j.LoggerFactory.getLogger(TemplateService::class.java)
+
     /** Discover templates from the templates directory on startup (see syncFromDir). */
     @PostConstruct
     fun seedCatalog() {
@@ -103,11 +106,13 @@ class TemplateService(
                         file.name == "image-url" -> file.readText().trim().ifBlank { null }
                         else -> null
                     } ?: return@forEach
-                val template =
-                    templateRepository.findByName(name).orElseGet { MachineTemplate(name = name) }
-                template.kind = kind
-                template.source = source
-                templateRepository.save(template)
+                // Each template is written in its own transaction; a single failure is logged and
+                // skipped, never aborting the scan or crashing startup.
+                try {
+                    catalogWriter.upsert(name, kind, source)
+                } catch (e: Exception) {
+                    log.warn("skipping template {}/{}: {}", kind, name, e.message)
+                }
             }
     }
 

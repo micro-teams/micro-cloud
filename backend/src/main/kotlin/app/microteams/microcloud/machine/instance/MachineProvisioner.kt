@@ -77,7 +77,7 @@ class MachineProvisioner(
                         )
                     }
 
-            when (machine.kind) {
+            when (machine.effectiveKind) {
                 MachineTemplateKind.LXC ->
                     provisionLxc(machine, upload, placement, network, cluster)
                 MachineTemplateKind.VM -> provisionVm(machine, upload, placement, network, cluster)
@@ -255,7 +255,7 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.RUNNING) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.kind) {
+                    when (machine.effectiveKind) {
                         MachineTemplateKind.LXC -> proxmoxClient.startLxc(cluster, node, it)
                         MachineTemplateKind.VM -> proxmoxClient.startVm(cluster, node, it)
                     }
@@ -270,7 +270,7 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.kind) {
+                    when (machine.effectiveKind) {
                         MachineTemplateKind.LXC -> proxmoxClient.stopLxc(cluster, node, it)
                         MachineTemplateKind.VM -> proxmoxClient.stopVm(cluster, node, it)
                     }
@@ -288,7 +288,7 @@ class MachineProvisioner(
                 val cluster = clusterOf(machine)
                 val node = placementService.getPlacement(machine.placementId!!).node!!
                 val upid =
-                    when (machine.kind) {
+                    when (machine.effectiveKind) {
                         MachineTemplateKind.LXC -> proxmoxClient.destroyLxc(cluster, node, vmid)
                         MachineTemplateKind.VM -> proxmoxClient.destroyVm(cluster, node, vmid)
                     }

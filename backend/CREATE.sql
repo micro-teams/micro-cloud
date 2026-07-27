@@ -262,7 +262,10 @@ CREATE
                 )
             ),
             PRIMARY KEY(id),
-            CONSTRAINT idx_template_name UNIQUE(name)
+            CONSTRAINT uk_template_name_kind UNIQUE(
+                name,
+                kind
+            )
         );
 
 CREATE
@@ -495,6 +498,10 @@ CREATE
         tenant_id,
         customer_id
     );
+
+CREATE
+    INDEX idx_template_name ON
+    microcloud.machine_template(name);
 
 CREATE
     INDEX IDXgibpxlfdrkuwm6mjmd0j0yb3v ON
