@@ -39,7 +39,14 @@ enum class MachineStatus {
 class Machine(
     @Column(name = "tenant_id", nullable = false) var tenantId: IdType? = null,
     @Column(name = "customer_id", nullable = false) var customerId: IdType? = null,
+    // Three separate fund accounts, one per cost stream, so a tenant can bill compute / newapi AI /
+    // ccproxy AI to different accounts (or the same one — the tenant may pass one and the others
+    // default to it). `account_id` is the COMPUTE account (kept for back-compat); the two AI ones
+    // are nullable so the column can be added to an existing machine table — a legacy null reads as
+    // "same as compute" (see the effective* getters).
     @Column(name = "account_id", nullable = false) var accountId: IdType? = null,
+    @Column(name = "newapi_account_id") var newapiAccountId: IdType? = null,
+    @Column(name = "ccproxy_account_id") var ccproxyAccountId: IdType? = null,
     @Column(nullable = false) var hostname: String? = null,
     @Column(name = "offering_id", nullable = false) var offeringId: IdType? = null,
     @Column(name = "type_id", nullable = false) var typeId: IdType? = null,
@@ -74,6 +81,14 @@ class Machine(
     @Column(nullable = false)
     var status: MachineStatus = MachineStatus.PROVISIONING,
 ) : BaseEntity()
+
+/** Account newapi AI usage bills to; a legacy null falls back to the compute account. */
+val Machine.effectiveNewapiAccountId: IdType
+    get() = this.newapiAccountId ?: this.accountId!!
+
+/** Account ccproxy AI usage bills to; a legacy null falls back to the compute account. */
+val Machine.effectiveCcproxyAccountId: IdType
+    get() = this.ccproxyAccountId ?: this.accountId!!
 
 interface MachineRepository : JpaRepository<Machine, IdType> {
     fun findByTenantId(tenantId: IdType): List<Machine>

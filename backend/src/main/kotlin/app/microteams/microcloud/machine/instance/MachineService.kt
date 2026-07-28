@@ -38,6 +38,8 @@ fun Machine.toDTO() =
         id = this.id!!,
         customerId = this.customerId!!,
         accountId = this.accountId!!,
+        newapiAccountId = this.effectiveNewapiAccountId,
+        ccproxyAccountId = this.effectiveCcproxyAccountId,
         hostname = this.hostname!!,
         offeringId = this.offeringId!!,
         typeId = this.typeId!!,
@@ -126,6 +128,15 @@ class MachineService(
         // Ownership: the customer and account must belong to the calling tenant (404 otherwise).
         customerService.getCustomer(tenantId, request.customerId)
         accountService.getAccount(tenantId, request.accountId)
+        // Per-stream billing accounts: compute / newapi / ccproxy. The tenant may pass one account
+        // and leave the AI ones blank (they default to the compute account), or split them. Each
+        // provided account must also belong to the tenant.
+        val newapiAccountId = request.newapiAccountId ?: request.accountId
+        val ccproxyAccountId = request.ccproxyAccountId ?: request.accountId
+        if (newapiAccountId != request.accountId)
+            accountService.getAccount(tenantId, newapiAccountId)
+        if (ccproxyAccountId != request.accountId)
+            accountService.getAccount(tenantId, ccproxyAccountId)
         // The offering (machine type + zone + template) must be one this tenant may use.
         val offering = offeringService.getUsableForTenant(tenantId, request.offeringId)
         val type = offeringService.typeOf(offering)
@@ -153,6 +164,8 @@ class MachineService(
                     tenantId = tenantId,
                     customerId = request.customerId,
                     accountId = request.accountId,
+                    newapiAccountId = newapiAccountId,
+                    ccproxyAccountId = ccproxyAccountId,
                     hostname = request.hostname,
                     offeringId = offering.id!!,
                     typeId = type.id!!,
