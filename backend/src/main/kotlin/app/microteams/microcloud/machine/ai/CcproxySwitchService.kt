@@ -63,6 +63,9 @@ class CcproxySwitchService(
             machineRepository.save(machine)
         }
         val ccId = machine.ccproxyMachineId!!
+        // A previous login the operator never completed leaves the machine stuck in `loggingIn`;
+        // cancel it so this (re)switch can start a fresh login instead of 409-ing.
+        cancelActiveLogin(ccId)
         awaitCcproxyStatus(ccId, setOf("awaitingLogin", "ready"))
 
         ccproxyClient.startLogin(ccId) // 409 if a login is already in progress → surfaced as 400
@@ -96,8 +99,10 @@ class CcproxySwitchService(
         settingsSsh.restoreNewapiEnv(machine, base, key, config.provisioning.taskTimeoutSeconds)
 
         // Free the ccproxy account (removes the engine session too); the proxy line remains in
-        // settings.json as an unregistered passthrough. A future switch re-registers.
+        // settings.json as an unregistered passthrough. A future switch re-registers. Cancel any
+        // in-flight login first so a half-done login doesn't linger.
         machine.ccproxyMachineId?.let { ccId ->
+            runCatching { cancelActiveLogin(ccId) }
             runCatching { ccproxyClient.deleteMachine(ccId) }
                 .onFailure {
                     log.warn("ccproxy delete for machine {} failed: {}", machine.id, it.message)
@@ -108,6 +113,17 @@ class CcproxySwitchService(
         machine.aiStatus = AiStatus.READY
         machineRepository.save(machine)
         return machine
+    }
+
+    /** Cancel the machine's current login-request if one is in progress (best-effort). */
+    private fun cancelActiveLogin(ccId: Long) {
+        val m = runCatching { ccproxyClient.getMachine(ccId) }.getOrNull() ?: return
+        m.currentLoginRequestId?.let { lrId ->
+            runCatching { ccproxyClient.cancelLogin(lrId) }
+                .onFailure {
+                    log.warn("cancel login {} on ccproxy {} failed: {}", lrId, ccId, it.message)
+                }
+        }
     }
 
     /** Block briefly until the ccproxy machine reaches one of [wanted] (or errors/times out). */

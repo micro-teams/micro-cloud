@@ -81,6 +81,14 @@ class CcproxyClient(private val config: MicroCloudConfig, private val objectMapp
         call("POST", "/machine/$id/login", "")
     }
 
+    /**
+     * Cancel an in-progress login-request (e.g. a login the operator never completed), which frees
+     * the machine from `loggingIn` back to `awaitingLogin` so a fresh login can start. Best-effort.
+     */
+    fun cancelLogin(loginRequestId: Long) {
+        call("POST", "/login-request/$loginRequestId/cancel", "")
+    }
+
     /** Tear the machine down on ccproxy: removes the engine session and frees the bound account. */
     fun deleteMachine(id: Long) {
         call("DELETE", "/machine/$id", null)
