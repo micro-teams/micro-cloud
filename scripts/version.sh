@@ -16,6 +16,7 @@ VERSION_FILE="$ROOT/VERSION"
 POM="$ROOT/backend/pom.xml"
 API="$ROOT/MicroCloud-API.yml"
 FRONTEND_PKG="$ROOT/frontend/package.json"
+FRONTEND_LOCK="$ROOT/frontend/package-lock.json"
 
 semver_re='^[0-9]+\.[0-9]+\.[0-9]+$'
 read_current() { tr -d '[:space:]' < "$VERSION_FILE"; }
@@ -28,6 +29,9 @@ if [[ $# -eq 0 ]]; then
   printf '  %-24s %s\n' "MicroCloud-API.yml"    "$(perl -ne 'print "$1\n" if /^  version:\s*"?([^"\n]+)"?/' "$API")"
   if [[ -f "$FRONTEND_PKG" ]]; then
     printf '  %-24s %s\n' "frontend/package.json" "$(node -p "require('$FRONTEND_PKG').version")"
+  fi
+  if [[ -f "$FRONTEND_LOCK" ]]; then
+    printf '  %-24s %s\n' "frontend/package-lock.json" "$(node -p "require('$FRONTEND_LOCK').version")"
   fi
   exit 0
 fi
@@ -45,6 +49,12 @@ perl -0777 -i -pe "s{(<artifactId>backend</artifactId>\s*<version>)[^<]+(</versi
 perl -i -pe "s{^(  version:\s*).*}{\${1}\"$api_ver\"}" "$API"
 if [[ -f "$FRONTEND_PKG" ]]; then
   node -e "const f='$FRONTEND_PKG';const p=require(f);p.version='$new';require('fs').writeFileSync(f, JSON.stringify(p,null,2)+'\n')"
+fi
+# Keep the lockfile in sync too, or `npm ci` fails on the version mismatch. Only the root package's
+# version fields change (the top-level "version" and packages[""].version); dependency entries that
+# happen to share a version string are untouched.
+if [[ -f "$FRONTEND_LOCK" ]]; then
+  node -e "const f='$FRONTEND_LOCK';const p=require(f);p.version='$new';if(p.packages&&p.packages['']){p.packages[''].version='$new'}require('fs').writeFileSync(f, JSON.stringify(p,null,2)+'\n')"
 fi
 
 echo "done. verifying:"

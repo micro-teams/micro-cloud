@@ -14,15 +14,18 @@
 package app.microteams.microcloud.machine.instance
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
+import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.ai.AiProviderRegistry
+import app.microteams.microcloud.machine.ai.AiStatus
 import app.microteams.microcloud.machine.network.Network
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
@@ -45,6 +48,7 @@ class MachineProvisioner(
     private val templateRepository: MachineTemplateRepository,
     private val machineRepository: MachineRepository,
     private val operatorSsh: OperatorSsh,
+    private val aiRegistry: AiProviderRegistry,
 ) {
     private val log = LoggerFactory.getLogger(MachineProvisioner::class.java)
     private val random = SecureRandom()
@@ -52,6 +56,10 @@ class MachineProvisioner(
     /** The Proxmox coordinates a machine lives at: cluster + node + vmid. */
     private fun clusterOf(machine: Machine): ProxmoxCluster =
         proxmoxService.getCluster(placementService.getPlacement(machine.placementId!!).clusterId!!)
+
+    /** The machine's kind = the kind of the placement it lives on (the authoritative source). */
+    private fun kindOf(machine: Machine): MachineKind =
+        placementService.getPlacement(machine.placementId!!).effectiveKind
 
     /** Kick off provisioning in the background; the caller's create returns immediately. */
     @Async
@@ -77,15 +85,35 @@ class MachineProvisioner(
                         )
                     }
 
-            when (machine.kind) {
-                MachineTemplateKind.LXC ->
-                    provisionLxc(machine, upload, placement, network, cluster)
-                MachineTemplateKind.VM -> provisionVm(machine, upload, placement, network, cluster)
+            // Resolve the AI provider and mint/prepare its per-machine config BEFORE init, so the
+            // init-machine.py run can apply it. AI setup is orthogonal to the machine: a failure
+            // here only marks aiStatus=ERROR, never fails the machine.
+            val aiProvider = aiRegistry.forMode(machine.aiMode)
+            val aiInitSuffix =
+                try {
+                    aiProvider.prepareInit(machine)
+                } catch (e: Exception) {
+                    log.error("AI prepare for machine {} failed: {}", machine.id, e.message, e)
+                    machine.aiStatus = AiStatus.ERROR
+                    ""
+                }
+
+            when (placement.effectiveKind) {
+                MachineKind.PROXMOX_LXC ->
+                    provisionLxc(machine, upload, placement, network, cluster, aiInitSuffix)
+                MachineKind.PROXMOX_VM ->
+                    provisionVm(machine, upload, placement, network, cluster, aiInitSuffix)
             }
 
             machine.status = MachineStatus.RUNNING
+            if (machine.aiStatus != AiStatus.ERROR) aiProvider.onReady(machine)
             machineRepository.save(machine)
-            log.info("machine {} is RUNNING ({}{})", machine.id, machine.kind, machine.vmid)
+            log.info(
+                "machine {} is RUNNING ({} {})",
+                machine.id,
+                placement.effectiveKind.wire,
+                machine.vmid,
+            )
         } catch (e: Exception) {
             log.error("provisioning machine {} failed: {}", machineId, e.message, e)
             machine.status = MachineStatus.ERROR
@@ -100,6 +128,7 @@ class MachineProvisioner(
         placement: Placement,
         network: Network,
         cluster: ProxmoxCluster,
+        aiInitSuffix: String,
     ) {
         val node = placement.node!!
         val ostemplate =
@@ -138,7 +167,7 @@ class MachineProvisioner(
         machine.vmid = vmid
         machineRepository.save(machine)
 
-        runInit(machine, network.gateway!!)
+        runInit(machine, network.gateway!!, aiInitSuffix)
     }
 
     /**
@@ -158,6 +187,7 @@ class MachineProvisioner(
         placement: Placement,
         network: Network,
         cluster: ProxmoxCluster,
+        aiInitSuffix: String,
     ) {
         val node = placement.node!!
         val templateVmid =
@@ -216,7 +246,7 @@ class MachineProvisioner(
             config.provisioning.taskTimeoutSeconds,
         )
         operatorSsh.waitForSsh(machine.ip!!, config.provisioning.sshReadyTimeoutSeconds)
-        runVmInit(machine)
+        runVmInit(machine, aiInitSuffix)
     }
 
     /**
@@ -224,7 +254,7 @@ class MachineProvisioner(
      * the login user, with the operator key) and run it with sudo. No-op when disabled, when there
      * is no operator key to log in with, or when the template ships no init-machine.py.
      */
-    private fun runVmInit(machine: Machine) {
+    private fun runVmInit(machine: Machine, aiInitSuffix: String) {
         val command = config.provisioning.vmInitCommand?.takeIf { it.isNotBlank() } ?: return
         if (operatorSsh.privateKeyPath() == null || operatorSsh.publicKey() == null) return
         val templateName =
@@ -237,7 +267,7 @@ class MachineProvisioner(
         val remote =
             command
                 .replace("{user}", machine.loginUser ?: "")
-                .replace("{sshPubkey}", machine.sshPubkey ?: "")
+                .replace("{sshPubkey}", machine.sshPubkey ?: "") + aiInitSuffix
         operatorSsh.runScript(
             machine.loginUser!!,
             machine.ip!!,
@@ -255,9 +285,9 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.RUNNING) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.kind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.startLxc(cluster, node, it)
-                        MachineTemplateKind.VM -> proxmoxClient.startVm(cluster, node, it)
+                    when (kindOf(machine)) {
+                        MachineKind.PROXMOX_LXC -> proxmoxClient.startLxc(cluster, node, it)
+                        MachineKind.PROXMOX_VM -> proxmoxClient.startVm(cluster, node, it)
                     }
                 proxmoxClient.waitForTask(cluster, upid, timeout())
             }
@@ -270,9 +300,9 @@ class MachineProvisioner(
         runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
             machine.vmid?.let {
                 val upid =
-                    when (machine.kind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.stopLxc(cluster, node, it)
-                        MachineTemplateKind.VM -> proxmoxClient.stopVm(cluster, node, it)
+                    when (kindOf(machine)) {
+                        MachineKind.PROXMOX_LXC -> proxmoxClient.stopLxc(cluster, node, it)
+                        MachineKind.PROXMOX_VM -> proxmoxClient.stopVm(cluster, node, it)
                     }
                 proxmoxClient.waitForTask(cluster, upid, timeout())
             }
@@ -285,15 +315,23 @@ class MachineProvisioner(
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
         try {
             machine.vmid?.let { vmid ->
-                val cluster = clusterOf(machine)
-                val node = placementService.getPlacement(machine.placementId!!).node!!
-                val upid =
-                    when (machine.kind) {
-                        MachineTemplateKind.LXC -> proxmoxClient.destroyLxc(cluster, node, vmid)
-                        MachineTemplateKind.VM -> proxmoxClient.destroyVm(cluster, node, vmid)
-                    }
-                proxmoxClient.waitForTask(cluster, upid, timeout())
+                val placement = placementService.getPlacement(machine.placementId!!)
+                val cluster = proxmoxService.getCluster(placement.clusterId!!)
+                val node = placement.node!!
+                when (placement.effectiveKind) {
+                    // pct destroy --purge --force tears down a running CT in one shot.
+                    MachineKind.PROXMOX_LXC ->
+                        proxmoxClient.waitForTask(
+                            cluster,
+                            proxmoxClient.destroyLxc(cluster, node, vmid),
+                            timeout(),
+                        )
+                    // qm destroy refuses a running VM, so stop it first.
+                    MachineKind.PROXMOX_VM ->
+                        proxmoxClient.destroyVmGracefully(cluster, node, vmid, timeout())
+                }
             }
+            aiRegistry.forMode(machine.aiMode).teardown(machine) // release the newapi token, etc.
             networkService.releaseIpsFor(machine.id!!)
             machineRepository.delete(machine) // soft delete
         } catch (e: Exception) {
@@ -325,7 +363,7 @@ class MachineProvisioner(
     }
 
     /** Run init-machine.py inside the fresh container over SSH-as-root, if configured. */
-    private fun runInit(machine: Machine, gateway: String) {
+    private fun runInit(machine: Machine, gateway: String, aiInitSuffix: String) {
         val command = config.provisioning.initCommand?.takeIf { it.isNotBlank() } ?: return
         if (operatorSsh.privateKeyPath() == null) return
         // `pct start` returning does NOT mean the guest is reachable — it's still booting (sshd not
@@ -336,7 +374,7 @@ class MachineProvisioner(
                 .replace("{user}", machine.loginUser ?: "")
                 .replace("{sshPubkey}", machine.sshPubkey ?: "")
                 .replace("{ip}", machine.ip ?: "")
-                .replace("{gateway}", gateway)
+                .replace("{gateway}", gateway) + aiInitSuffix
         operatorSsh.run("root", machine.ip!!, remote, config.provisioning.taskTimeoutSeconds)
         log.info("init-machine for machine {} succeeded", machine.id)
     }

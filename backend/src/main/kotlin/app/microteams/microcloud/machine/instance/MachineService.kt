@@ -21,6 +21,7 @@ import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.offering.OfferingService
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.PlacementStatus
+import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.type.MachineType
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
@@ -37,6 +38,8 @@ fun Machine.toDTO() =
         id = this.id!!,
         customerId = this.customerId!!,
         accountId = this.accountId!!,
+        newapiAccountId = this.effectiveNewapiAccountId,
+        ccproxyAccountId = this.effectiveCcproxyAccountId,
         hostname = this.hostname!!,
         offeringId = this.offeringId!!,
         typeId = this.typeId!!,
@@ -47,6 +50,11 @@ fun Machine.toDTO() =
         memoryMb = this.memoryMb!!,
         diskGb = this.diskGb!!,
         ip = this.ip,
+        aiMode = (this.aiMode ?: app.microteams.microcloud.machine.ai.AiMode.NONE).name.lowercase(),
+        aiStatus =
+            (this.aiStatus ?: app.microteams.microcloud.machine.ai.AiStatus.DISABLED)
+                .name
+                .lowercase(),
         status =
             when (this.status) {
                 MachineStatus.PROVISIONING -> MachineStatusDTO.provisioning
@@ -120,6 +128,15 @@ class MachineService(
         // Ownership: the customer and account must belong to the calling tenant (404 otherwise).
         customerService.getCustomer(tenantId, request.customerId)
         accountService.getAccount(tenantId, request.accountId)
+        // Per-stream billing accounts: compute / newapi / ccproxy. The tenant may pass one account
+        // and leave the AI ones blank (they default to the compute account), or split them. Each
+        // provided account must also belong to the tenant.
+        val newapiAccountId = request.newapiAccountId ?: request.accountId
+        val ccproxyAccountId = request.ccproxyAccountId ?: request.accountId
+        if (newapiAccountId != request.accountId)
+            accountService.getAccount(tenantId, newapiAccountId)
+        if (ccproxyAccountId != request.accountId)
+            accountService.getAccount(tenantId, ccproxyAccountId)
         // The offering (machine type + zone + template) must be one this tenant may use.
         val offering = offeringService.getUsableForTenant(tenantId, request.offeringId)
         val type = offeringService.typeOf(offering)
@@ -131,14 +148,13 @@ class MachineService(
         val (placementId, network) =
             selectPlacementAndNetwork(type, offering.zoneId!!, offering.templateId!!)
 
-        // The machine's form (LXC / VM) is fixed by its template's kind; the provisioner branches
-        // on
-        // it. The tenant-facing model stays kind-agnostic (kind is not in MachineDTO).
-        val kind =
-            templateRepository
-                .findById(offering.templateId!!)
-                .map { it.kind }
-                .orElse(app.microteams.microcloud.machine.template.MachineTemplateKind.LXC)
+        // The machine's form (proxmox/lxc, proxmox/vm) follows from the placement it lands on; the
+        // provisioner reads it from the placement. Nothing kind-related is stored on the machine.
+
+        // AI mode: every machine defaults to NEWAPI (fully automatic — a per-machine relay token,
+        // usable immediately, no human step). ccproxy is only ever reached via a super-admin
+        // switch,
+        // never chosen at create. If newapi isn't wired, the machine simply gets no AI.
 
         // Flush the insert so @CreationTimestamp is assigned before we mutate + save again for the
         // IP.
@@ -148,12 +164,13 @@ class MachineService(
                     tenantId = tenantId,
                     customerId = request.customerId,
                     accountId = request.accountId,
+                    newapiAccountId = newapiAccountId,
+                    ccproxyAccountId = ccproxyAccountId,
                     hostname = request.hostname,
                     offeringId = offering.id!!,
                     typeId = type.id!!,
                     zoneId = offering.zoneId,
                     templateId = offering.templateId,
-                    kind = kind,
                     apiKeyId = request.apiKeyId,
                     cores = request.cores,
                     memoryMb = request.memoryMb,
@@ -162,6 +179,8 @@ class MachineService(
                     networkId = network,
                     loginUser = request.user,
                     sshPubkey = request.sshPubkey,
+                    aiMode = app.microteams.microcloud.machine.ai.AiMode.NEWAPI,
+                    aiStatus = app.microteams.microcloud.machine.ai.AiStatus.PROVISIONING,
                 )
             )
         machine.ip = networkService.allocateIp(network, machine.id!!)
@@ -183,10 +202,15 @@ class MachineService(
         templateId: IdType,
     ): Pair<IdType, IdType> {
         val zone = zoneService.getZone(zoneId)
+        val templateKind = templateRepository.findById(templateId).map { it.kind }.orElse(null)
         val candidateIds = type.placementIds.filter { it in zone.placementIds }
         for (placementId in candidateIds) {
             val placement = placementService.getPlacement(placementId)
             if (placement.status != PlacementStatus.ACTIVE) continue
+            // The placement must host the template's kind (an LXC template can't run on a VM
+            // placement). This is normally implied — a template only uploads to matching-kind
+            // placements — but enforce it explicitly during selection.
+            if (templateKind != null && placement.effectiveKind != templateKind) continue
             val uploaded =
                 templateUploadRepository
                     .findByTemplateIdAndPlacementId(templateId, placementId)

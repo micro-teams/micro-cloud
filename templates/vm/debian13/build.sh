@@ -13,6 +13,14 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+# The base cloud image's first-boot cloud-init runs its own apt (Proxmox sets package_upgrade), which
+# holds the dpkg/apt lock. MicroCloud SSHes in as soon as TCP :22 is up — possibly while that apt is
+# still running — so wait for cloud-init to finish before our own apt, or `apt-get` fails to take the
+# lock ("Could not get lock /var/lib/apt/lists/lock"). `|| true`: a degraded/errored cloud-init still
+# means its apt is done, and we'd rather proceed than abort the bake.
+echo "[build] waiting for first-boot cloud-init to finish..."
+cloud-init status --wait >/dev/null 2>&1 || true
+
 # --- Docker, via Docker's official apt repository (the standard Debian install flow) ---
 apt-get update
 apt-get install -y ca-certificates curl
@@ -25,6 +33,11 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
+
+# --- The base tools the LXC template declares (templates/lxc/debian13/files/packages.txt) ---
+# A stock Debian cloud image ships neither, so the same workload behaved differently depending on
+# which offering it landed on — and the difference only shows up at runtime, on the machine.
+apt-get install -y git tmux
 
 # --- Put every cloud-init-created login user in the docker group ---
 # The Debian cloud image declares `system_info.default_user.groups` in a /etc/cloud/cloud.cfg.d

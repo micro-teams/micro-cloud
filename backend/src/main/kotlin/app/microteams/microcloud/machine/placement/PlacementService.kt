@@ -11,6 +11,7 @@
 package app.microteams.microcloud.machine.placement
 
 import app.microteams.microcloud.common.helper.PageHelper
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.model.*
 import org.rucca.cheese.common.error.NotFoundError
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional
 fun Placement.toDTO() =
     PlacementDTO(
         id = this.id!!,
+        kind = this.effectiveKind.wire,
         name = this.name!!,
         clusterId = this.clusterId!!,
         node = this.node!!,
@@ -56,6 +58,7 @@ class PlacementService(
         return placementRepository
             .save(
                 Placement(
+                    kind = MachineKind.fromWire(request.kind), // 400 if the kind is unknown
                     name = request.name,
                     clusterId = request.clusterId,
                     node = request.node,

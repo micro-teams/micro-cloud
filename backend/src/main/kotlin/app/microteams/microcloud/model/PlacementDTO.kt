@@ -5,14 +5,18 @@ import io.swagger.v3.oas.annotations.media.Schema
 import javax.validation.Valid
 
 /**
- * a concrete cluster+node+pool+storage coordinate machines can land on
+ * a concrete landing coordinate machines can be created on. Its leading coordinate is the `kind` —
+ * the provider + machine form it hosts (proxmox/lxc, proxmox/vm, …) — followed by the
+ * provider-specific location (cluster+node+pool+storage for Proxmox). A machine can only be created
+ * here from a template of the same kind.
  *
  * @param id
+ * @param kind provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm
  * @param name
  * @param clusterId
  * @param node
  * @param pool
- * @param storage storage for the machine rootfs, e.g. local-lvm
+ * @param storage storage for the machine rootfs / disk, e.g. local-lvm
  * @param status
  * @param createdAt
  */
@@ -20,6 +24,13 @@ data class PlacementDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("id", required = true)
     val id: kotlin.Long,
+    @Schema(
+        example = "proxmox/lxc",
+        required = true,
+        description = "provider + machine form this placement hosts, e.g. proxmox/lxc or proxmox/vm",
+    )
+    @get:JsonProperty("kind", required = true)
+    val kind: kotlin.String,
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("name", required = true)
     val name: kotlin.String,
@@ -35,7 +46,7 @@ data class PlacementDTO(
     @Schema(
         example = "null",
         required = true,
-        description = "storage for the machine rootfs, e.g. local-lvm",
+        description = "storage for the machine rootfs / disk, e.g. local-lvm",
     )
     @get:JsonProperty("storage", required = true)
     val storage: kotlin.String,

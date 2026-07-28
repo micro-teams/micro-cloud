@@ -1,10 +1,8 @@
 /*
- *  Description: Integration test for provisioning a VM-kind machine. The substrate and tenant flow
- *               are identical to the LXC path (offering / customer / account / IP lease); what
- *               differs is the provisioner branch. With the template's kind = VM and a baked
- *               template vmid recorded on the upload, creating a machine drives the Proxmox VM path
- *               (qm clone → cloud-init config → start), NOT the LXC path (pct create). Proxmox and
- *               the operator SSH are mocked, so the async worker runs without a real cluster.
+ *  Description: Integration test for the NEWAPI ai mode. With the platform default mode = NEWAPI and
+ *               newapi enabled, provisioning a machine mints a per-machine newapi token and reports
+ *               aiMode=newapi / aiStatus=ready — orthogonally to the machine's own RUNNING status.
+ *               Proxmox and the newapi client are mocked; SSH init is disabled.
  *
  *  Author(s):
  *      Nictheboy Li    <nictheboy@outlook.com>
@@ -14,7 +12,7 @@
 package app.microteams.microcloud.api
 
 import app.microteams.microcloud.machine.MachineKind
-import app.microteams.microcloud.machine.proxmox.OperatorSsh
+import app.microteams.microcloud.machine.ai.NewapiClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.template.MachineTemplate
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
@@ -22,6 +20,7 @@ import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
+import io.mockk.every
 import io.mockk.verify
 import org.json.JSONObject
 import org.junit.jupiter.api.Test
@@ -31,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.MediaType
+import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
@@ -38,7 +38,15 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @AutoConfigureMockMvc
-class MachineProvisionVmTest
+@TestPropertySource(
+    properties =
+        [
+            "microcloud.provisioning.init-command=",
+            "microcloud.newapi.root-password=test-root-pw",
+            "microcloud.newapi.machine-base-url=http://host:8080/newapi",
+        ]
+)
+class MachineAiNewapiTest
 @Autowired
 constructor(
     private val mockMvc: MockMvc,
@@ -46,10 +54,8 @@ constructor(
     private val uploadRepository: TemplateUploadRepository,
     @Value("\${microcloud.superadmin-password}") private val superadminPassword: String,
 ) {
-    // Stub Proxmox + operator SSH so the async VM provisioning worker runs end-to-end (qm clone →
-    // config → start → wait-for-ssh) without a real cluster or a reachable guest.
     @MockkBean(relaxed = true) private lateinit var proxmoxClient: ProxmoxClient
-    @MockkBean(relaxed = true) private lateinit var operatorSsh: OperatorSsh
+    @MockkBean private lateinit var newapiClient: NewapiClient
 
     private fun post(url: String, token: String, body: String) =
         mockMvc
@@ -62,8 +68,12 @@ constructor(
             .andReturn()
 
     @Test
-    fun vmMachineTakesTheVmProvisioningPath() {
-        val adminToken =
+    fun newapiMachineMintsATokenAndReportsAiReady() {
+        every { newapiClient.isConfigured() } returns true
+        every { newapiClient.ensureToken(any(), any()) } returns 77
+        every { newapiClient.revealKey(77) } returns "sk-relaytoken"
+
+        val admin =
             JSONObject(
                     mockMvc
                         .perform(
@@ -81,17 +91,16 @@ constructor(
             templateRepository
                 .save(
                     MachineTemplate(
-                        name = "debian13-vm-${System.nanoTime()}",
-                        kind = MachineKind.PROXMOX_VM,
+                        name = "debian13-ai-${System.nanoTime()}",
+                        kind = MachineKind.PROXMOX_LXC,
                     )
                 )
                 .id!!
-
         val clusterId =
             JSONObject(
                     post(
                             "/machine/proxmox",
-                            adminToken,
+                            admin,
                             """{"name":"lab","apiUrl":"https://pve:8006","tokenId":"m@pve!t","tokenSecret":"s"}""",
                         )
                         .response
@@ -102,29 +111,27 @@ constructor(
             JSONObject(
                     post(
                             "/machine/placement",
-                            adminToken,
-                            """{"kind":"proxmox/vm","name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}""",
+                            admin,
+                            """{"kind":"proxmox/lxc","name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}""",
                         )
                         .response
                         .contentAsString
                 )
                 .getLong("id")
-        val networkId =
-            JSONObject(
-                    post(
-                            "/machine/network",
-                            adminToken,
-                            """{"placementId":$placementId,"startIp":"10.8.0.10","endIp":"10.8.0.20","gateway":"10.8.0.1","prefixLength":24,"bridge":"vmbr0"}""",
-                        )
-                        .response
-                        .contentAsString
+        JSONObject(
+            post(
+                    "/machine/network",
+                    admin,
+                    """{"placementId":$placementId,"startIp":"10.7.0.10","endIp":"10.7.0.20","gateway":"10.7.0.1","prefixLength":24,"bridge":"vmbr0"}""",
                 )
-                .getLong("id")
+                .response
+                .contentAsString
+        )
         val typeId =
             JSONObject(
                     post(
                             "/machine/type",
-                            adminToken,
+                            admin,
                             """{"name":"standard","placementIds":[$placementId],"coresMin":1,"coresMax":4,"memoryMbMin":1024,"memoryMbMax":8192,"diskGbMin":10,"diskGbMax":100}""",
                         )
                         .response
@@ -133,37 +140,30 @@ constructor(
                 .getLong("id")
         val zoneId =
             JSONObject(
-                    post(
-                            "/machine/zone",
-                            adminToken,
-                            """{"name":"z1","placementIds":[$placementId]}""",
-                        )
+                    post("/machine/zone", admin, """{"name":"z1","placementIds":[$placementId]}""")
                         .response
                         .contentAsString
                 )
                 .getLong("id")
-        // The VM template is baked (DONE) on the placement: its upload carries a template vmid, not
-        // a vztmpl volid.
         uploadRepository.save(
             TemplateUpload(
                 templateId = templateId,
                 placementId = placementId,
                 status = TemplateUploadStatus.DONE,
-                templateVmid = 9000,
+                volid = "local:vztmpl/x.tar.zst",
             )
         )
-
         val tenantId =
-            JSONObject(post("/tenant", adminToken, """{"name":"vmt"}""").response.contentAsString)
+            JSONObject(post("/tenant", admin, """{"name":"ait"}""").response.contentAsString)
                 .getLong("id")
         val secret =
-            JSONObject(post("/tenant/$tenantId/secret", adminToken, "{}").response.contentAsString)
+            JSONObject(post("/tenant/$tenantId/secret", admin, "{}").response.contentAsString)
                 .getString("secret")
         val offeringId =
             JSONObject(
                     post(
                             "/machine/offering",
-                            adminToken,
+                            admin,
                             """{"tenantId":$tenantId,"machineTypeId":$typeId,"zoneId":$zoneId,"templateId":$templateId}""",
                         )
                         .response
@@ -172,7 +172,7 @@ constructor(
                 .getLong("id")
         val customerId =
             JSONObject(
-                    post("/customer", secret, """{"externalRef":"u-1"}""").response.contentAsString
+                    post("/customer", secret, """{"externalRef":"u"}""").response.contentAsString
                 )
                 .getLong("id")
         val accountId =
@@ -183,6 +183,7 @@ constructor(
                 )
                 .getLong("id")
 
+        // Create a machine — aiMode defaults to NEWAPI (platform default).
         val res =
             mockMvc
                 .perform(
@@ -190,43 +191,31 @@ constructor(
                         .header("Authorization", "Bearer $secret")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(
-                            """{"customerId":$customerId,"accountId":$accountId,"hostname":"vm-1","offeringId":$offeringId,"cores":2,"memoryMb":2048,"diskGb":20,"user":"dev","sshPubkey":"ssh-ed25519 AAAA dev"}"""
+                            """{"customerId":$customerId,"accountId":$accountId,"hostname":"ai-1","offeringId":$offeringId,"cores":2,"memoryMb":2048,"diskGb":20,"user":"dev","sshPubkey":"ssh-ed25519 AAAA dev"}"""
                         )
                 )
                 .andExpect(status().isCreated)
-                .andExpect(jsonPath("$.status").value("provisioning"))
-                .andExpect(jsonPath("$.ip").value("10.8.0.10"))
+                .andExpect(jsonPath("$.aiMode").value("newapi"))
                 .andReturn()
-        val machineId = JSONObject(res.response.contentAsString).getLong("id")
+        val id = JSONObject(res.response.contentAsString).getLong("id")
 
-        // The async worker takes the VM branch: it clones the baked template and never touches the
-        // LXC path.
-        verify(timeout = 5000) { proxmoxClient.cloneVm(any(), eq("pve"), eq(9000), any()) }
-        verify(exactly = 0) { proxmoxClient.createLxc(any(), any(), any()) }
-
-        // Wait until provisioning finished (the machine has a vmid to act on), then delete it: the
-        // VM branch must go through destroyVmGracefully (which stops a running VM before
-        // destroying,
-        // since qm destroy refuses a running VM) — never the LXC destroy path.
-        waitForStatus(machineId, "running", secret)
-        mockMvc
-            .perform(delete("/machine/$machineId").header("Authorization", "Bearer $secret"))
-            .andExpect(status().isAccepted)
-        verify(timeout = 5000) { proxmoxClient.destroyVmGracefully(any(), eq("pve"), any(), any()) }
-        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
-    }
-
-    private fun waitForStatus(id: Long, status: String, secret: String) {
+        // The async worker mints a newapi token for the machine and lands aiStatus=ready.
+        verify(timeout = 5000) { newapiClient.ensureToken("mc-machine-$id", any()) }
+        verify(timeout = 5000) { newapiClient.revealKey(77) }
+        var aiStatus = ""
         repeat(50) {
-            val body =
-                mockMvc
-                    .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
-                    .andReturn()
-                    .response
-                    .contentAsString
-            if (runCatching { JSONObject(body).getString("status") }.getOrNull() == status) return
+            aiStatus =
+                JSONObject(
+                        mockMvc
+                            .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                            .andReturn()
+                            .response
+                            .contentAsString
+                    )
+                    .getString("aiStatus")
+            if (aiStatus == "ready") return@repeat
             Thread.sleep(100)
         }
-        error("machine $id did not reach $status in time")
+        org.junit.jupiter.api.Assertions.assertEquals("ready", aiStatus)
     }
 }

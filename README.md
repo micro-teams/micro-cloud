@@ -75,7 +75,7 @@ flowchart TD
 ```sh
 cd backend && ./scripts/dependency-start.sh   # a local Postgres with the "microcloud" schema
 ./mvnw install                                # builds + runs integration tests
-java -jar target/backend-0.1.0.jar
+java -jar target/backend-*.jar
 ```
 
 The whole cluster (with newapi): `cd deploy && bash gen-env.sh && docker compose up -d`.

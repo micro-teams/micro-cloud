@@ -30,8 +30,8 @@
 
 package app.microteams.microcloud.api
 
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.template.MachineTemplate
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import org.json.JSONArray
 import org.json.JSONObject
@@ -127,7 +127,7 @@ constructor(
                 .save(
                     MachineTemplate(
                         name = "live-${System.nanoTime()}",
-                        kind = MachineTemplateKind.LXC,
+                        kind = MachineKind.PROXMOX_LXC,
                         source = System.getenv("MICROCLOUD_PVE_TEMPLATE_SOURCE"),
                     )
                 )
@@ -156,6 +156,7 @@ constructor(
                             "/machine/placement",
                             adminToken,
                             JSONObject()
+                                .put("kind", "proxmox/lxc")
                                 .put("name", "live-p")
                                 .put("clusterId", clusterId)
                                 .put("node", env("MICROCLOUD_PVE_NODE"))

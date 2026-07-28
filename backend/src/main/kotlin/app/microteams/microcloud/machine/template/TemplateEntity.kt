@@ -10,17 +10,14 @@
 
 package app.microteams.microcloud.machine.template
 
+import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.MachineKindConverter
 import jakarta.persistence.*
 import java.util.Optional
 import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
 import org.rucca.cheese.common.persistent.IdType
 import org.springframework.data.jpa.repository.JpaRepository
-
-enum class MachineTemplateKind {
-    LXC,
-    VM,
-}
 
 enum class MachineTemplateStatus {
     ACTIVE,
@@ -38,14 +35,22 @@ enum class TemplateUploadStatus {
 @SQLRestriction("deleted_at IS NULL")
 @Table(
     name = "machine_template",
-    indexes = [Index(name = "idx_template_name", columnList = "name", unique = true)],
+    // Identity is (name, kind), NOT name alone: the same OS name exists once per kind (e.g. a
+    // `debian13` LXC template AND a `debian13` VM template, laid out as templates/lxc/debian13 and
+    // templates/vm/debian13). A name-only unique constraint would make the two collide — the dir
+    // scan would clobber one with the other.
+    indexes = [Index(name = "idx_template_name", columnList = "name")],
+    uniqueConstraints =
+        [UniqueConstraint(name = "uk_template_name_kind", columnNames = ["name", "kind"])],
 )
 class MachineTemplate(
     @Column(nullable = false) var name: String? = null,
     @Column var description: String? = null,
-    @Enumerated(EnumType.STRING)
+    // The image's kind (format + provider). A template can only be used on a placement of the same
+    // kind. Stored as the wire string via the converter (legacy "LXC"/"VM" rows read fine).
+    @Convert(converter = MachineKindConverter::class)
     @Column(nullable = false)
-    var kind: MachineTemplateKind = MachineTemplateKind.LXC,
+    var kind: MachineKind = MachineKind.PROXMOX_LXC,
     // Where the image is fetched from when uploading to a placement: a local file path or http(s)
     // URL.
     @Column(length = 1024) var source: String? = null,
@@ -55,7 +60,7 @@ class MachineTemplate(
 ) : BaseEntity()
 
 interface MachineTemplateRepository : JpaRepository<MachineTemplate, IdType> {
-    fun findByName(name: String): Optional<MachineTemplate>
+    fun findByNameAndKind(name: String, kind: MachineKind): Optional<MachineTemplate>
 }
 
 @Entity

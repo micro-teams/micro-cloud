@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: "21"
           distribution: "temurin"
@@ -84,7 +84,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
           shellcheck deploy/*.sh backend/scripts/*.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Syntax-check the template routines (stdlib-only Python)
@@ -109,7 +109,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         # Don't upload the build-record artifact — package-zip downloads all artifacts and it isn't
         # a normal zip, which breaks that step.
         env:

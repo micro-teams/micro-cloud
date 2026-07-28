@@ -12,9 +12,9 @@
 
 package app.microteams.microcloud.api
 
+import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.template.MachineTemplate
-import app.microteams.microcloud.machine.template.MachineTemplateKind
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
@@ -96,7 +96,7 @@ constructor(
                 .save(
                     MachineTemplate(
                         name = "debian13-prov-${System.nanoTime()}",
-                        kind = MachineTemplateKind.LXC,
+                        kind = MachineKind.PROXMOX_LXC,
                     )
                 )
                 .id!!
@@ -117,7 +117,7 @@ constructor(
                     post(
                             "/machine/placement",
                             adminToken,
-                            """{"name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}""",
+                            """{"kind":"proxmox/lxc","name":"p1","clusterId":$clusterId,"node":"pve","pool":"microcloud","storage":"local-lvm"}""",
                         )
                         .response
                         .contentAsString

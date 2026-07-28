@@ -57,6 +57,18 @@ provisioning out of the box. (Advanced: the defaults can be overridden by adding
 `MICROCLOUD_PROVISIONING_*` env to the backend — e.g. set `microcloud.provisioning.init-command`
 blank to skip SSH init — but you don't need to.)
 
+**AI (Claude Code model access) needs no manual wiring.** Every machine defaults to **newapi** — a
+per-machine relay token, fully automatic. `gen-env.sh` generates `NEWAPI_ROOT_PASSWORD` and derives
+`NEWAPI_MACHINE_BASE_URL` (`http://<this-host-ip>:<port>/newapi`, reached through the gateway since
+machines are outside the compose network); the backend initializes newapi with that root password on
+first use, logs in, and mints tokens — no access tokens or URLs to configure. If
+`NEWAPI_MACHINE_BASE_URL` was guessed wrong (NAT / public domain), edit it in `.env`.
+
+Two things remain manual, both **inside newapi's own UI** (not MicroCloud): configure an upstream
+model **channel** (Anthropic, DeepSeek, …, with the provider key), and top up quota if needed.
+MicroCloud only mints/deletes per-machine tokens. (ccproxy — the subscription-backed alternative for
+heavy users — is a separate super-admin switch, not covered here.)
+
 ## Upgrades & the schema (`CREATE.sql`)
 
 The backend creates/updates its own tables on boot via Hibernate `ddl-auto=update`. That is fine for
@@ -64,6 +76,56 @@ adding tables and nullable columns, but it will **not** perform destructive or N
 tables that already hold rows. `CREATE.sql` in the bundle root is the exact schema this release
 expects — keep the file from each release and diff them to see what changed, so on an upgrade you can
 hand-write the SQL migration (e.g. backfill a new NOT-NULL column) before starting the new backend.
+
+### Upgrading to the VM-support release (one-time)
+
+This release adds VM machines alongside LXC. Two schema changes, both handled cleanly by
+`ddl-auto=update` (no action needed): the new **nullable** columns `machine.kind` and
+`template_upload.template_vmid` are just added; existing machines keep `kind = NULL`, which the
+backend reads as LXC.
+
+There is **one manual step, but only if you are upgrading a deployment that already has templates**:
+a template's identity changed from `name` to `(name, kind)`, so the same OS name can exist once as
+LXC and once as VM (e.g. `debian13` for both). `ddl-auto` adds the new `uk_template_name_kind`
+constraint but does **not** drop the old name-only unique constraint, which would block the VM
+template from registering. Drop it once (Hibernate has already added the replacement):
+
+```sql
+ALTER TABLE microcloud.machine_template DROP CONSTRAINT idx_template_name;
+```
+
+Until you do, LXC keeps working and the backend just logs `skipping template VM/<name>` — the VM
+template appears in the catalog as soon as the old constraint is gone. Fresh deployments ship the
+correct schema and need none of this.
+
+### Upgrading to the placement-kind release (one-time)
+
+Placements now lead with a `kind` (`proxmox/lxc` / `proxmox/vm`) — the provider + machine form they
+host — which is the authoritative source the provisioner dispatches on. `ddl-auto=update` just adds
+the new nullable `placement.kind` column; nothing breaks, because a legacy row (null kind) is read
+as `proxmox/lxc` (every placement created before this column existed was a Proxmox LXC one). No
+manual step is required.
+
+`kind` values are now written as `proxmox/lxc` / `proxmox/vm` (previously `machine_template.kind`
+stored `LXC` / `VM`). The backend reads the legacy values fine, but an old **CHECK constraint** that
+Hibernate had put on `machine_template.kind` (`CHECK (kind IN ('LXC','VM'))`) would reject the new
+values — so **registering a VM template (or rewriting any template's kind) fails on an upgraded DB
+until that check is dropped**:
+
+```sql
+ALTER TABLE microcloud.machine_template DROP CONSTRAINT IF EXISTS machine_template_kind_check;
+```
+
+Recommended (so existing placements report their kind explicitly and are unambiguous going forward):
+
+```sql
+UPDATE microcloud.placement SET kind = 'proxmox/lxc' WHERE kind IS NULL;
+```
+
+Note this release also drops `machine.kind` (kind is now a property of the placement, not the
+machine). `ddl-auto` never drops columns, so the old `machine.kind` column simply lingers unused on
+an existing DB — harmless; drop it by hand if you want it gone. Fresh deployments ship the correct
+schema and need none of this.
 
 ## Provisioning (reaching Proxmox and the machines)
 

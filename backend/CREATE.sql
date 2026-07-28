@@ -199,14 +199,17 @@ CREATE
             cores INTEGER NOT NULL,
             disk_gb INTEGER NOT NULL,
             memory_mb INTEGER NOT NULL,
+            newapi_token_id INTEGER,
             vmid INTEGER,
             account_id BIGINT NOT NULL,
             api_key_id BIGINT,
+            ccproxy_account_id BIGINT,
             created_at TIMESTAMP(6) NOT NULL,
             customer_id BIGINT NOT NULL,
             deleted_at TIMESTAMP(6),
             id BIGINT NOT NULL,
             network_id BIGINT NOT NULL,
+            newapi_account_id BIGINT,
             offering_id BIGINT NOT NULL,
             placement_id BIGINT NOT NULL,
             template_id BIGINT NOT NULL,
@@ -215,14 +218,23 @@ CREATE
             updated_at TIMESTAMP(6) NOT NULL,
             zone_id BIGINT,
             ssh_pubkey VARCHAR(4096),
-            hostname VARCHAR(255) NOT NULL,
-            ip VARCHAR(255),
-            kind VARCHAR(255) CHECK(
-                kind IN(
-                    'LXC',
-                    'VM'
+            ai_mode VARCHAR(255) CHECK(
+                ai_mode IN(
+                    'NONE',
+                    'NEWAPI',
+                    'CCPROXY'
                 )
             ),
+            ai_status VARCHAR(255) CHECK(
+                ai_status IN(
+                    'DISABLED',
+                    'PROVISIONING',
+                    'READY',
+                    'ERROR'
+                )
+            ),
+            hostname VARCHAR(255) NOT NULL,
+            ip VARCHAR(255),
             login_user VARCHAR(255) NOT NULL,
             status VARCHAR(255) NOT NULL CHECK(
                 status IN(
@@ -248,12 +260,7 @@ CREATE
             updated_at TIMESTAMP(6) NOT NULL,
             SOURCE VARCHAR(1024),
             description VARCHAR(255),
-            kind VARCHAR(255) NOT NULL CHECK(
-                kind IN(
-                    'LXC',
-                    'VM'
-                )
-            ),
+            kind VARCHAR(255) NOT NULL,
             name VARCHAR(255) NOT NULL,
             status VARCHAR(255) NOT NULL CHECK(
                 status IN(
@@ -262,7 +269,10 @@ CREATE
                 )
             ),
             PRIMARY KEY(id),
-            CONSTRAINT idx_template_name UNIQUE(name)
+            CONSTRAINT uk_template_name_kind UNIQUE(
+                name,
+                kind
+            )
         );
 
 CREATE
@@ -347,6 +357,7 @@ CREATE
             deleted_at TIMESTAMP(6),
             id BIGINT NOT NULL,
             updated_at TIMESTAMP(6) NOT NULL,
+            kind VARCHAR(255),
             name VARCHAR(255) NOT NULL,
             node VARCHAR(255) NOT NULL,
             pool VARCHAR(255) NOT NULL,
@@ -495,6 +506,10 @@ CREATE
         tenant_id,
         customer_id
     );
+
+CREATE
+    INDEX idx_template_name ON
+    microcloud.machine_template(name);
 
 CREATE
     INDEX IDXgibpxlfdrkuwm6mjmd0j0yb3v ON

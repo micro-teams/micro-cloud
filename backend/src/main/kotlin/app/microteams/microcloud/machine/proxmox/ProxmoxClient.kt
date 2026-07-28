@@ -230,6 +230,23 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         send(cluster, "GET", "/nodes/$node/qemu/$vmid/status/current", null).path("status").asText()
 
     /**
+     * Destroy a VM, stopping it first if it isn't already stopped. Unlike `pct destroy` for an LXC
+     * (which purges even a running container), `qm destroy` REFUSES a running VM ("VM N is
+     * running - destroy failed"), so a running VM must be `qm stop`ped first. Each step is awaited
+     * via [waitForTask].
+     */
+    fun destroyVmGracefully(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        timeoutSeconds: Long,
+    ) {
+        if (vmStatus(cluster, node, vmid) != "stopped")
+            waitForTask(cluster, stopVm(cluster, node, vmid), timeoutSeconds)
+        waitForTask(cluster, destroyVm(cluster, node, vmid), timeoutSeconds)
+    }
+
+    /**
      * Encode an SSH public key for the QEMU `sshkeys` cloud-init param, which Proxmox requires to
      * be URL-encoded ONCE by the caller (space as `%20`, not `+`). The transport form-encoding in
      * [send] then encodes it a second time, and Proxmox decodes exactly one layer — matching what

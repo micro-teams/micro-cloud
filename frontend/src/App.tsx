@@ -225,9 +225,10 @@ function adminNav(token: string): NavItem[] {
       render: () => (
         <ResourcePanel
           title="Placements"
-          description="A landing coordinate: cluster + node + pool + storage."
+          description="A landing coordinate: kind (proxmox/lxc | proxmox/vm) + cluster + node + pool + storage."
           columns={[
             { key: "id", label: "id" },
+            { key: "kind", label: "kind" },
             { key: "name", label: "name" },
             { key: "clusterId", label: "cluster" },
             { key: "node", label: "node" },
@@ -237,11 +238,12 @@ function adminNav(token: string): NavItem[] {
           ]}
           load={list(token, "/machine/placement")}
           createFields={[
+            { name: "kind", label: "kind", placeholder: "proxmox/lxc" },
             { name: "name", label: "name" },
             { name: "clusterId", label: "clusterId", type: "number" },
             { name: "node", label: "node" },
             { name: "pool", label: "pool" },
-            { name: "storage", label: "storage (rootfs)", placeholder: "local-lvm" },
+            { name: "storage", label: "storage (rootfs / disk)", placeholder: "local-lvm" },
           ]}
           onCreate={create(token, "/machine/placement")}
           actions={[{ label: "delete", confirm: "Delete?", run: del(token, "/machine/placement") }]}
@@ -474,7 +476,9 @@ function tenantNav(token: string): NavItem[] {
           columns={[
             { key: "id", label: "id" },
             { key: "customerId", label: "customer" },
-            { key: "accountId", label: "account" },
+            { key: "accountId", label: "acct·compute" },
+            { key: "newapiAccountId", label: "acct·newapi" },
+            { key: "ccproxyAccountId", label: "acct·ccproxy" },
             { key: "typeId", label: "type" },
             { key: "templateId", label: "template" },
             { key: "cores", label: "cores" },
@@ -482,11 +486,15 @@ function tenantNav(token: string): NavItem[] {
             { key: "diskGb", label: "disk" },
             { key: "ip", label: "ip" },
             { key: "status", label: "status" },
+            { key: "aiMode", label: "ai" },
+            { key: "aiStatus", label: "ai status" },
           ]}
           load={list(token, "/machine")}
           createFields={[
             { name: "customerId", label: "customerId", type: "number" },
-            { name: "accountId", label: "accountId", type: "number" },
+            { name: "accountId", label: "accountId (compute)", type: "number" },
+            { name: "newapiAccountId", label: "newapiAccountId (blank = compute)", type: "number", optional: true },
+            { name: "ccproxyAccountId", label: "ccproxyAccountId (blank = compute)", type: "number", optional: true },
             { name: "hostname", label: "hostname" },
             { name: "offeringId", label: "offeringId", type: "number" },
             { name: "cores", label: "cores", type: "number" },
@@ -494,7 +502,6 @@ function tenantNav(token: string): NavItem[] {
             { name: "diskGb", label: "diskGb", type: "number" },
             { name: "user", label: "login user" },
             { name: "sshPubkey", label: "sshPubkey", optional: true },
-            { name: "apiKeyId", label: "apiKeyId", type: "number", optional: true },
           ]}
           onCreate={create(token, "/machine")}
           actions={[
