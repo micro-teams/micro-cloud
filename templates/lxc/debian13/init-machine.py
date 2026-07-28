@@ -39,6 +39,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Initialize a provisioned MicroCloud Debian 13 machine.")
     p.add_argument("--user", required=True, help="non-root user to create")
     p.add_argument("--ssh-pubkey", help="SSH public key to authorize for the user (preferred)")
+    p.add_argument("--authorized-key", action="append", default=[],
+                   help="extra SSH public key(s) to authorize for the user (operator / ccproxy); repeatable")
     p.add_argument("--password-stdin", action="store_true",
                    help="read the user's password from stdin (never a CLI arg)")
     p.add_argument("--ip", help="static IPv4 for the machine, CIDR form e.g. 192.168.16.42/20")
@@ -71,13 +73,24 @@ def set_password_from_stdin(name: str) -> None:
     run(["chpasswd"], input=f"{name}:{pw}\n", text=True)
 
 
-def authorize_key(name: str, pubkey: str) -> None:
+def authorize_key(name: str, pubkey: str, extra_keys=None) -> None:
+    """Authorize the user's own key plus any extra keys (operator / ccproxy).
+
+    The operator + ccproxy keys go on the LOGIN USER (not just root) so MicroCloud and ccproxy can
+    still SSH in as this user after hardening disables root SSH.
+    """
     home = pwd.getpwnam(name).pw_dir
     ssh_dir = os.path.join(home, ".ssh")
     os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
     keys = os.path.join(ssh_dir, "authorized_keys")
+    seen, lines = set(), []
+    for k in [pubkey, *(extra_keys or [])]:
+        k = k.strip()
+        if k and k not in seen:
+            seen.add(k)
+            lines.append(k)
     with open(keys, "w") as f:
-        f.write(pubkey.rstrip("\n") + "\n")
+        f.write("".join(k + "\n" for k in lines))
     os.chmod(keys, 0o600)
     _chown_tree(ssh_dir, name)
 
@@ -207,8 +220,8 @@ def main(argv: list[str]) -> int:
     create_user(args.user)
     if args.password_stdin:
         set_password_from_stdin(args.user)
-    if args.ssh_pubkey:
-        authorize_key(args.user, args.ssh_pubkey)
+    if args.ssh_pubkey or args.authorized_key:
+        authorize_key(args.user, args.ssh_pubkey or "", args.authorized_key)
     grant_sudo_and_docker(args.user)
     if args.ip:
         configure_network(args.interface, args.ip, args.gateway)

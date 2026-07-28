@@ -15,8 +15,10 @@ package app.microteams.microcloud.machine.instance
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
 import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.ai.AiMode
 import app.microteams.microcloud.machine.ai.AiProviderRegistry
 import app.microteams.microcloud.machine.ai.AiStatus
+import app.microteams.microcloud.machine.ai.CcproxyClient
 import app.microteams.microcloud.machine.network.Network
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
@@ -49,6 +51,7 @@ class MachineProvisioner(
     private val machineRepository: MachineRepository,
     private val operatorSsh: OperatorSsh,
     private val aiRegistry: AiProviderRegistry,
+    private val ccproxyClient: CcproxyClient,
 ) {
     private val log = LoggerFactory.getLogger(MachineProvisioner::class.java)
     private val random = SecureRandom()
@@ -98,15 +101,25 @@ class MachineProvisioner(
                     ""
                 }
 
+            // Authorize the operator key AND (if ccproxy is wired) the ccproxy operator key on the
+            // LOGIN USER, so both can SSH in after hardening disables root login: MicroCloud for a
+            // later newapi-restore, ccproxy for its own provision/login. Appended to init for every
+            // machine, independent of aiMode.
+            val initSuffix = aiInitSuffix + authorizedKeyArgs()
+
             when (placement.effectiveKind) {
                 MachineKind.PROXMOX_LXC ->
-                    provisionLxc(machine, upload, placement, network, cluster, aiInitSuffix)
+                    provisionLxc(machine, upload, placement, network, cluster, initSuffix)
                 MachineKind.PROXMOX_VM ->
-                    provisionVm(machine, upload, placement, network, cluster, aiInitSuffix)
+                    provisionVm(machine, upload, placement, network, cluster, initSuffix)
             }
 
             machine.status = MachineStatus.RUNNING
             if (machine.aiStatus != AiStatus.ERROR) aiProvider.onReady(machine)
+            // Birth-init on ccproxy: register the machine so its Claude is pointed at the engine
+            // (unregistered → tunneled through, no account consumed) from birth, ready for a later
+            // subscription switch. Best-effort — a failure never affects the machine or its newapi.
+            registerWithCcproxy(machine)
             machineRepository.save(machine)
             log.info(
                 "machine {} is RUNNING ({} {})",
@@ -118,6 +131,43 @@ class MachineProvisioner(
             log.error("provisioning machine {} failed: {}", machineId, e.message, e)
             machine.status = MachineStatus.ERROR
             machineRepository.save(machine)
+        }
+    }
+
+    /**
+     * `--authorized-key` args for init-machine.py: the operator key plus, when ccproxy is wired,
+     * the ccproxy operator key (fetched best-effort). Both are authorized on the login user.
+     */
+    private fun authorizedKeyArgs(): String {
+        val keys = mutableListOf<String>()
+        operatorSsh.publicKey()?.takeIf { it.isNotBlank() }?.let { keys += it }
+        if (ccproxyClient.isConfigured()) {
+            try {
+                ccproxyClient.getSshPubkey().takeIf { it.isNotBlank() }?.let { keys += it }
+            } catch (e: Exception) {
+                log.warn("could not fetch ccproxy operator ssh-pubkey: {}", e.message)
+            }
+        }
+        // Keys are base64-ish (no single quotes), so single-quoting is safe.
+        return keys.joinToString("") { " --authorized-key '$it'" }
+    }
+
+    /** Register the machine with ccproxy at birth (best-effort); records the ccproxy machine id. */
+    private fun registerWithCcproxy(machine: Machine) {
+        if (!ccproxyClient.isConfigured() || machine.ccproxyMachineId != null) return
+        if (machine.ip.isNullOrBlank() || machine.loginUser.isNullOrBlank()) return
+        try {
+            val m =
+                ccproxyClient.createMachine(
+                    host = machine.ip!!,
+                    sshUser = machine.loginUser!!,
+                    sshPort = 22,
+                    label = machine.hostname,
+                )
+            machine.ccproxyMachineId = m.id
+            log.info("machine {} registered with ccproxy as {}", machine.id, m.id)
+        } catch (e: Exception) {
+            log.warn("ccproxy birth-init for machine {} failed: {}", machine.id, e.message)
         }
     }
 
@@ -331,7 +381,11 @@ class MachineProvisioner(
                         proxmoxClient.destroyVmGracefully(cluster, node, vmid, timeout())
                 }
             }
-            aiRegistry.forMode(machine.aiMode).teardown(machine) // release the newapi token, etc.
+            // AI teardown, independent of the machine's current aiMode (a switched machine still
+            // holds BOTH a newapi token and a ccproxy registration): release the newapi token and
+            // tear the machine down on ccproxy (frees its bound account). Both best-effort.
+            runCatching { aiRegistry.forMode(AiMode.NEWAPI).teardown(machine) }
+            machine.ccproxyMachineId?.let { id -> runCatching { ccproxyClient.deleteMachine(id) } }
             networkService.releaseIpsFor(machine.id!!)
             machineRepository.delete(machine) // soft delete
         } catch (e: Exception) {

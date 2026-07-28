@@ -41,6 +41,23 @@ class MicroCloudConfig {
      */
     var newapi: Newapi = Newapi()
 
+    /**
+     * ccproxy integration — the OPTIONAL, super-admin-triggered switch of a machine's Claude Code
+     * from the newapi relay to a real subscription login behind the ccproxy MITM. ccproxy is an
+     * external service (its own tenant API); MicroCloud is a tenant. When unset, the switch is
+     * simply unavailable and every machine stays on newapi.
+     */
+    var ccproxy: Ccproxy = Ccproxy()
+
+    class Ccproxy {
+        /** ccproxy tenant API base (e.g. http://ccproxy-prod...). Blank = ccproxy not wired. */
+        var baseUrl: String? = null
+        /** This tenant's opaque bearer secret, minted by ccproxy's super-admin. Never committed. */
+        var tenantSecret: String? = null
+        /** How long to poll a ccproxy machine's status (birth-init / login) before giving up. */
+        var statusTimeoutSeconds: Long = 900
+    }
+
     class Newapi {
         /** newapi admin API base, reachable from the backend. Fixed compose service by default. */
         var adminBaseUrl: String? = "http://newapi:3000"

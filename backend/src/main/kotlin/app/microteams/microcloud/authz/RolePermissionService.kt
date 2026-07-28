@@ -117,6 +117,8 @@ class RolePermissionService {
                         ),
                         "offering",
                     ),
+                    // Switch a machine's Claude Code between newapi and ccproxy (operator action).
+                    grant(listOf("switch-machine-ccproxy", "switch-machine-newapi"), "machine"),
                 ),
         )
 

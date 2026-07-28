@@ -41,6 +41,14 @@ NGINX_HTTP_PORT=$NGINX_PORT
 # since machines are off the compose network); auto-guessed from this host's IP — override if wrong.
 NEWAPI_ROOT_PASSWORD=$(secret 24)
 NEWAPI_MACHINE_BASE_URL=http://$HOST_IP:$NGINX_PORT/newapi
+
+# ccproxy (OPTIONAL — the super-admin-triggered switch to a real subscription login behind the
+# ccproxy MITM). ccproxy is an external service; MicroCloud is one of its tenants. Leave both blank
+# to disable the switch (every machine just stays on newapi). The tenant secret is minted by
+# ccproxy's super-admin — paste it here; it is NOT auto-generated and must never be committed.
+# CCPROXY_BASE_URL must include ccproxy's API prefix, e.g. http://ccproxy-host/ccproxy
+CCPROXY_BASE_URL=
+CCPROXY_TENANT_SECRET=
 EOF
 chmod 600 .env
 

@@ -204,6 +204,7 @@ CREATE
             account_id BIGINT NOT NULL,
             api_key_id BIGINT,
             ccproxy_account_id BIGINT,
+            ccproxy_machine_id BIGINT,
             created_at TIMESTAMP(6) NOT NULL,
             customer_id BIGINT NOT NULL,
             deleted_at TIMESTAMP(6),
