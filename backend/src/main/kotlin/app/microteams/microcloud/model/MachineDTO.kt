@@ -16,6 +16,8 @@ import javax.validation.Valid
  * @param memoryMb
  * @param diskGb
  * @param status
+ * @param aiMode how this machine's Claude Code gets model access: none | newapi | ccproxy
+ * @param aiStatus AI setup state, independent of `status`: disabled | provisioning | ready | error
  * @param zoneId
  * @param apiKeyId the model key whose account the machine's Claude Code bills to (if configured)
  * @param ip private IP once assigned
@@ -60,6 +62,21 @@ data class MachineDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("status", required = true)
     val status: MachineStatusDTO,
+    @Schema(
+        example = "newapi",
+        required = true,
+        description = "how this machine's Claude Code gets model access: none | newapi | ccproxy",
+    )
+    @get:JsonProperty("aiMode", required = true)
+    val aiMode: kotlin.String,
+    @Schema(
+        example = "ready",
+        required = true,
+        description =
+            "AI setup state, independent of `status`: disabled | provisioning | ready | error",
+    )
+    @get:JsonProperty("aiStatus", required = true)
+    val aiStatus: kotlin.String,
     @Schema(example = "null", description = "")
     @get:JsonProperty("zoneId")
     val zoneId: kotlin.Long? = null,

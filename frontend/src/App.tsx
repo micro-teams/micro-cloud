@@ -484,6 +484,8 @@ function tenantNav(token: string): NavItem[] {
             { key: "diskGb", label: "disk" },
             { key: "ip", label: "ip" },
             { key: "status", label: "status" },
+            { key: "aiMode", label: "ai" },
+            { key: "aiStatus", label: "ai status" },
           ]}
           load={list(token, "/machine")}
           createFields={[
@@ -496,7 +498,6 @@ function tenantNav(token: string): NavItem[] {
             { name: "diskGb", label: "diskGb", type: "number" },
             { name: "user", label: "login user" },
             { name: "sshPubkey", label: "sshPubkey", optional: true },
-            { name: "apiKeyId", label: "apiKeyId", type: "number", optional: true },
           ]}
           onCreate={create(token, "/machine")}
           actions={[

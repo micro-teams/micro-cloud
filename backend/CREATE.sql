@@ -199,6 +199,7 @@ CREATE
             cores INTEGER NOT NULL,
             disk_gb INTEGER NOT NULL,
             memory_mb INTEGER NOT NULL,
+            newapi_token_id INTEGER,
             vmid INTEGER,
             account_id BIGINT NOT NULL,
             api_key_id BIGINT,
@@ -215,6 +216,21 @@ CREATE
             updated_at TIMESTAMP(6) NOT NULL,
             zone_id BIGINT,
             ssh_pubkey VARCHAR(4096),
+            ai_mode VARCHAR(255) CHECK(
+                ai_mode IN(
+                    'NONE',
+                    'NEWAPI',
+                    'CCPROXY'
+                )
+            ),
+            ai_status VARCHAR(255) CHECK(
+                ai_status IN(
+                    'DISABLED',
+                    'PROVISIONING',
+                    'READY',
+                    'ERROR'
+                )
+            ),
             hostname VARCHAR(255) NOT NULL,
             ip VARCHAR(255),
             login_user VARCHAR(255) NOT NULL,

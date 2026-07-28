@@ -48,6 +48,11 @@ fun Machine.toDTO() =
         memoryMb = this.memoryMb!!,
         diskGb = this.diskGb!!,
         ip = this.ip,
+        aiMode = (this.aiMode ?: app.microteams.microcloud.machine.ai.AiMode.NONE).name.lowercase(),
+        aiStatus =
+            (this.aiStatus ?: app.microteams.microcloud.machine.ai.AiStatus.DISABLED)
+                .name
+                .lowercase(),
         status =
             when (this.status) {
                 MachineStatus.PROVISIONING -> MachineStatusDTO.provisioning
@@ -135,6 +140,11 @@ class MachineService(
         // The machine's form (proxmox/lxc, proxmox/vm) follows from the placement it lands on; the
         // provisioner reads it from the placement. Nothing kind-related is stored on the machine.
 
+        // AI mode: every machine defaults to NEWAPI (fully automatic — a per-machine relay token,
+        // usable immediately, no human step). ccproxy is only ever reached via a super-admin
+        // switch,
+        // never chosen at create. If newapi isn't wired, the machine simply gets no AI.
+
         // Flush the insert so @CreationTimestamp is assigned before we mutate + save again for the
         // IP.
         val machine =
@@ -156,6 +166,8 @@ class MachineService(
                     networkId = network,
                     loginUser = request.user,
                     sshPubkey = request.sshPubkey,
+                    aiMode = app.microteams.microcloud.machine.ai.AiMode.NEWAPI,
+                    aiStatus = app.microteams.microcloud.machine.ai.AiStatus.PROVISIONING,
                 )
             )
         machine.ip = networkService.allocateIp(network, machine.id!!)

@@ -63,7 +63,9 @@ services:
         "spring.datasource.password":"${POSTGRES_PASSWORD}",
         "spring.jpa.hibernate.ddl-auto":"update",
         "application.jwt-secret":"${JWT_SECRET}",
-        "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}"}
+        "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}",
+        "microcloud.newapi.root-password":"${NEWAPI_ROOT_PASSWORD}",
+        "microcloud.newapi.machine-base-url":"${NEWAPI_MACHINE_BASE_URL}"}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
