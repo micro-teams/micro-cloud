@@ -704,6 +704,40 @@ paths:
         "202": { description: "Accepted — stop requested (status 'stopping'); poll GET for 'stopped'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /machine/{id}/ai/ccproxy:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: switchMachineToCcproxy
+      summary: "Switch a machine's Claude Code to a ccproxy subscription login (super-admin)"
+      description: >-
+        Register the machine with ccproxy if needed and start its subscription login; a human
+        login-operator completes the OAuth on ccproxy's side. Returns immediately with aiStatus
+        'provisioning'; MicroCloud polls ccproxy in the background and lands 'ready' once the
+        credential is captured, at which point ccproxy has flipped the machine to the official
+        endpoint. Poll GET /machine for aiStatus.
+      security: [{ superAdmin: [] }]
+      responses:
+        "202": { description: "Accepted — login started", content: { application/json: { schema: { $ref: "#/components/schemas/MachineAiStatus" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/{id}/ai/newapi:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: switchMachineToNewapi
+      summary: "Switch a machine's Claude Code back to the newapi relay (super-admin)"
+      description: >-
+        Restore the machine's newapi relay config (ccproxy removes it on the way to official but
+        never restores it) and free the ccproxy account. A running Claude keeps its in-memory
+        config; the next one started uses newapi.
+      security: [{ superAdmin: [] }]
+      responses:
+        "200": { description: "OK — switched back to newapi", content: { application/json: { schema: { $ref: "#/components/schemas/MachineAiStatus" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     tenantSecret:
@@ -1253,6 +1287,15 @@ components:
     MachineStatus:
       type: string
       enum: [provisioning, starting, running, stopping, stopped, deleting, deleted, error]
+    MachineAiStatus:
+      type: object
+      description: A machine's AI mode/status after a switch action.
+      properties:
+        machineId: { type: integer, format: int64 }
+        aiMode: { type: string, nullable: true, description: "NONE | NEWAPI | CCPROXY" }
+        aiStatus: { type: string, nullable: true, description: "DISABLED | PROVISIONING | READY | ERROR" }
+        ccproxyMachineId: { type: integer, format: int64, nullable: true, description: this machine's id on ccproxy }
+      required: [machineId]
     Machine:
       type: object
       properties:

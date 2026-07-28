@@ -21,6 +21,7 @@ import app.microteams.microcloud.model.ListPlacementsResponseDTO
 import app.microteams.microcloud.model.ListProxmoxClustersResponseDTO
 import app.microteams.microcloud.model.ListTemplateUploadsResponseDTO
 import app.microteams.microcloud.model.ListZonesResponseDTO
+import app.microteams.microcloud.model.MachineAiStatusDTO
 import app.microteams.microcloud.model.MachineDTO
 import app.microteams.microcloud.model.MachineTypeDTO
 import app.microteams.microcloud.model.NetworkDTO
@@ -1151,6 +1152,80 @@ interface MachineApi {
     fun stopMachine(
         @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
     ): ResponseEntity<MachineDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
+        summary = "Switch a machine's Claude Code to a ccproxy subscription login (super-admin)",
+        operationId = "switchMachineToCcproxy",
+        description =
+            """Register the machine with ccproxy if needed and start its subscription login; a human login-operator completes the OAuth on ccproxy's side. Returns immediately with aiStatus 'provisioning'; MicroCloud polls ccproxy in the background and lands 'ready' once the credential is captured, at which point ccproxy has flipped the machine to the official endpoint. Poll GET /machine for aiStatus.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "202",
+                    description = "Accepted — login started",
+                    content = [Content(schema = Schema(implementation = MachineAiStatusDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "superAdmin")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/ai/ccproxy"],
+        produces = ["application/json"],
+    )
+    fun switchMachineToCcproxy(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
+    ): ResponseEntity<MachineAiStatusDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
+        summary = "Switch a machine's Claude Code back to the newapi relay (super-admin)",
+        operationId = "switchMachineToNewapi",
+        description =
+            """Restore the machine's newapi relay config (ccproxy removes it on the way to official but never restores it) and free the ccproxy account. A running Claude keeps its in-memory config; the next one started uses newapi.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "200",
+                    description = "OK — switched back to newapi",
+                    content = [Content(schema = Schema(implementation = MachineAiStatusDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "superAdmin")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/ai/newapi"],
+        produces = ["application/json"],
+    )
+    fun switchMachineToNewapi(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
+    ): ResponseEntity<MachineAiStatusDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
     }
 

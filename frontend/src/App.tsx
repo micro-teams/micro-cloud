@@ -507,6 +507,18 @@ function tenantNav(token: string): NavItem[] {
           actions={[
             { label: "start", run: (row) => request("POST", `/machine/${row.id}/start`, t(token)) },
             { label: "stop", run: (row) => request("POST", `/machine/${row.id}/stop`, t(token)) },
+            // AI switch (super-admin): newapi relay <-> ccproxy subscription. Needs a super-admin
+            // token; a human completes the ccproxy OAuth out of band, then aiStatus lands 'ready'.
+            {
+              label: "→ccproxy",
+              confirm: "Switch this machine's Claude Code to a ccproxy subscription login?",
+              run: (row) => request("POST", `/machine/${row.id}/ai/ccproxy`, t(token)),
+            },
+            {
+              label: "→newapi",
+              confirm: "Switch this machine's Claude Code back to the newapi relay?",
+              run: (row) => request("POST", `/machine/${row.id}/ai/newapi`, t(token)),
+            },
             { label: "delete", confirm: "Destroy this machine?", run: del(token, "/machine") },
           ]}
         />

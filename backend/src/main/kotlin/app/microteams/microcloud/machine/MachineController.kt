@@ -13,6 +13,8 @@ package app.microteams.microcloud.machine
 
 import app.microteams.microcloud.api.MachineApi
 import app.microteams.microcloud.customer.CustomerService
+import app.microteams.microcloud.machine.ai.CcproxySwitchService
+import app.microteams.microcloud.machine.instance.Machine
 import app.microteams.microcloud.machine.instance.MachineService
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.offering.OfferingService
@@ -46,6 +48,7 @@ class MachineController(
     private val zoneService: ZoneService,
     private val templateService: TemplateService,
     private val machineService: MachineService,
+    private val ccproxySwitchService: CcproxySwitchService,
     private val offeringService: OfferingService,
     private val customerService: CustomerService,
     private val authenticationService: AuthenticationService,
@@ -338,6 +341,28 @@ class MachineController(
         machineService.deleteMachine(tenantId(), id)
         return ResponseEntity(HttpStatus.ACCEPTED)
     }
+
+    // ---- Machine AI switch (super-admin): newapi relay <-> ccproxy subscription ----
+
+    @Guard("switch-machine-ccproxy", "machine")
+    override fun switchMachineToCcproxy(
+        @PathVariable("id") id: IdType
+    ): ResponseEntity<MachineAiStatusDTO> =
+        ResponseEntity.accepted().body(ccproxySwitchService.switchToCcproxy(id).toAiStatusDTO())
+
+    @Guard("switch-machine-newapi", "machine")
+    override fun switchMachineToNewapi(
+        @PathVariable("id") id: IdType
+    ): ResponseEntity<MachineAiStatusDTO> =
+        ResponseEntity.ok(ccproxySwitchService.switchToNewapi(id).toAiStatusDTO())
+
+    private fun Machine.toAiStatusDTO() =
+        MachineAiStatusDTO(
+            machineId = this.id!!,
+            aiMode = this.aiMode?.name,
+            aiStatus = this.aiStatus?.name,
+            ccproxyMachineId = this.ccproxyMachineId,
+        )
 
     // ---- Offerings (admin composes per tenant; tenant lists its own) ----
 
