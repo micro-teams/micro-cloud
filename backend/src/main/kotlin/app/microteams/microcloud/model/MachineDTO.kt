@@ -8,6 +8,8 @@ import javax.validation.Valid
  * @param id
  * @param customerId
  * @param accountId fund account charged for compute
+ * @param newapiAccountId fund account charged for newapi AI usage
+ * @param ccproxyAccountId fund account charged for ccproxy AI usage
  * @param hostname
  * @param offeringId the offering the machine was created from
  * @param typeId
@@ -33,6 +35,20 @@ data class MachineDTO(
     @Schema(example = "null", required = true, description = "fund account charged for compute")
     @get:JsonProperty("accountId", required = true)
     val accountId: kotlin.Long,
+    @Schema(
+        example = "null",
+        required = true,
+        description = "fund account charged for newapi AI usage",
+    )
+    @get:JsonProperty("newapiAccountId", required = true)
+    val newapiAccountId: kotlin.Long,
+    @Schema(
+        example = "null",
+        required = true,
+        description = "fund account charged for ccproxy AI usage",
+    )
+    @get:JsonProperty("ccproxyAccountId", required = true)
+    val ccproxyAccountId: kotlin.Long,
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("hostname", required = true)
     val hostname: kotlin.String,

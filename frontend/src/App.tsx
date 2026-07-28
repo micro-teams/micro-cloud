@@ -476,7 +476,9 @@ function tenantNav(token: string): NavItem[] {
           columns={[
             { key: "id", label: "id" },
             { key: "customerId", label: "customer" },
-            { key: "accountId", label: "account" },
+            { key: "accountId", label: "acct·compute" },
+            { key: "newapiAccountId", label: "acct·newapi" },
+            { key: "ccproxyAccountId", label: "acct·ccproxy" },
             { key: "typeId", label: "type" },
             { key: "templateId", label: "template" },
             { key: "cores", label: "cores" },
@@ -490,7 +492,9 @@ function tenantNav(token: string): NavItem[] {
           load={list(token, "/machine")}
           createFields={[
             { name: "customerId", label: "customerId", type: "number" },
-            { name: "accountId", label: "accountId", type: "number" },
+            { name: "accountId", label: "accountId (compute)", type: "number" },
+            { name: "newapiAccountId", label: "newapiAccountId (blank = compute)", type: "number", optional: true },
+            { name: "ccproxyAccountId", label: "ccproxyAccountId (blank = compute)", type: "number", optional: true },
             { name: "hostname", label: "hostname" },
             { name: "offeringId", label: "offeringId", type: "number" },
             { name: "cores", label: "cores", type: "number" },

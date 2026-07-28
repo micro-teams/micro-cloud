@@ -1259,6 +1259,8 @@ components:
         id: { type: integer, format: int64 }
         customerId: { type: integer, format: int64 }
         accountId: { type: integer, format: int64, description: fund account charged for compute }
+        newapiAccountId: { type: integer, format: int64, description: fund account charged for newapi AI usage }
+        ccproxyAccountId: { type: integer, format: int64, description: fund account charged for ccproxy AI usage }
         hostname: { type: string }
         offeringId: { type: integer, format: int64, description: the offering the machine was created from }
         typeId: { type: integer, format: int64 }
@@ -1283,12 +1285,14 @@ components:
           description: "AI setup state, independent of `status`: disabled | provisioning | ready | error"
           example: ready
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, customerId, accountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status, aiMode, aiStatus]
+      required: [id, customerId, accountId, newapiAccountId, ccproxyAccountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status, aiMode, aiStatus]
     CreateMachineRequest:
       type: object
       properties:
         customerId: { type: integer, format: int64 }
         accountId: { type: integer, format: int64, description: fund account to charge for compute }
+        newapiAccountId: { type: integer, format: int64, nullable: true, description: "account for newapi AI usage; defaults to accountId if omitted" }
+        ccproxyAccountId: { type: integer, format: int64, nullable: true, description: "account for ccproxy AI usage; defaults to accountId if omitted" }
         hostname: { type: string, description: the machine's hostname }
         offeringId: { type: integer, format: int64, description: the offering (machine type + zone + template) to provision from }
         cores: { type: integer, description: "within the offering type's coresMin..coresMax" }

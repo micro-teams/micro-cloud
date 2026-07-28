@@ -12,6 +12,8 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param memoryMb within the offering type's memoryMbMin..memoryMbMax
  * @param diskGb within the offering type's diskGbMin..diskGbMax
  * @param user non-root login user to create on the machine
+ * @param newapiAccountId account for newapi AI usage; defaults to accountId if omitted
+ * @param ccproxyAccountId account for ccproxy AI usage; defaults to accountId if omitted
  * @param sshPubkey SSH public key to authorize for the user
  * @param apiKeyId (legacy, optional) a pre-created model key to bind; superseded by aiMode
  */
@@ -60,6 +62,18 @@ data class CreateMachineRequestDTO(
     )
     @get:JsonProperty("user", required = true)
     val user: kotlin.String,
+    @Schema(
+        example = "null",
+        description = "account for newapi AI usage; defaults to accountId if omitted",
+    )
+    @get:JsonProperty("newapiAccountId")
+    val newapiAccountId: kotlin.Long? = null,
+    @Schema(
+        example = "null",
+        description = "account for ccproxy AI usage; defaults to accountId if omitted",
+    )
+    @get:JsonProperty("ccproxyAccountId")
+    val ccproxyAccountId: kotlin.Long? = null,
     @Schema(example = "null", description = "SSH public key to authorize for the user")
     @get:JsonProperty("sshPubkey")
     val sshPubkey: kotlin.String? = null,
