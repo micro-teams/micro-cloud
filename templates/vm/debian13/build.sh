@@ -23,7 +23,9 @@ cloud-init status --wait >/dev/null 2>&1 || true
 
 # --- Docker, via Docker's official apt repository (the standard Debian install flow) ---
 apt-get update
-apt-get install -y ca-certificates curl
+# ca-certificates+curl for the Docker repo below; tmux is required by the ccproxy subscription-login
+# flow (it drives Claude Code inside a tmux session and does not install tmux itself).
+apt-get install -y ca-certificates curl tmux
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc

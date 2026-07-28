@@ -65,7 +65,9 @@ services:
         "application.jwt-secret":"${JWT_SECRET}",
         "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}",
         "microcloud.newapi.root-password":"${NEWAPI_ROOT_PASSWORD}",
-        "microcloud.newapi.machine-base-url":"${NEWAPI_MACHINE_BASE_URL}"}
+        "microcloud.newapi.machine-base-url":"${NEWAPI_MACHINE_BASE_URL}",
+        "microcloud.ccproxy.base-url":"${CCPROXY_BASE_URL}",
+        "microcloud.ccproxy.tenant-secret":"${CCPROXY_TENANT_SECRET}"}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s

@@ -22,6 +22,7 @@ Example (how MicroCloud pipes it in):
 
 import argparse
 import grp
+import json
 import os
 import pwd
 import subprocess
@@ -40,6 +41,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Initialize a provisioned MicroCloud Debian 13 machine.")
     p.add_argument("--user", required=True, help="non-root user to create")
     p.add_argument("--ssh-pubkey", help="SSH public key to authorize for the user (preferred)")
+    p.add_argument("--authorized-key", action="append", default=[],
+                   help="extra SSH public key(s) to authorize for the user (operator / ccproxy); repeatable")
     p.add_argument("--password-stdin", action="store_true",
                    help="read the user's password from stdin (never a CLI arg)")
     p.add_argument("--ip", help="static IPv4 for the machine, CIDR form e.g. 192.168.16.42/20")
@@ -72,13 +75,24 @@ def set_password_from_stdin(name: str) -> None:
     run(["chpasswd"], input=f"{name}:{pw}\n", text=True)
 
 
-def authorize_key(name: str, pubkey: str) -> None:
+def authorize_key(name: str, pubkey: str, extra_keys=None) -> None:
+    """Authorize the user's own key plus any extra keys (operator / ccproxy).
+
+    The operator + ccproxy keys go on the LOGIN USER (not just root) so MicroCloud and ccproxy can
+    still SSH in as this user after hardening disables root SSH.
+    """
     home = pwd.getpwnam(name).pw_dir
     ssh_dir = os.path.join(home, ".ssh")
     os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
     keys = os.path.join(ssh_dir, "authorized_keys")
+    seen, lines = set(), []
+    for k in [pubkey, *(extra_keys or [])]:
+        k = k.strip()
+        if k and k not in seen:
+            seen.add(k)
+            lines.append(k)
     with open(keys, "w") as f:
-        f.write(pubkey.rstrip("\n") + "\n")
+        f.write("".join(k + "\n" for k in lines))
     os.chmod(keys, 0o600)
     _chown_tree(ssh_dir, name)
 
@@ -129,37 +143,44 @@ def configure_network(interface: str, cidr: str, gateway: str) -> None:
 
 
 def write_ai_config(name: str, base_url: str, token: str) -> None:
-    """newapi relay config, read by Claude Code through the user's login shell.
+    """Point Claude Code at the newapi relay via ~/.claude/settings.json's `env` block.
 
-    Written into the user's OWN home (mode 600, user-owned) — not /etc/profile.d, which a non-root
-    user's login shell cannot read if root-only, and which would expose the token to every user if
-    world-readable. `bash -lc` (how Claude Code launches) sources ~/.profile, which we point at it.
+    settings.json's `env` overrides shell/system env AND — unlike a sourced ~/.profile snippet —
+    reaches background/supervisor Claude sessions too (they don't inherit the launching shell). It is
+    also the file ccproxy edits to switch this machine to a subscription login: ccproxy MERGES its
+    proxy keys in, and on switch removes exactly these ANTHROPIC_* keys. So MERGE (read-modify-write),
+    never overwrite — preserve any keys ccproxy or the user already placed there.
     """
     entry = pwd.getpwnam(name)
     home, uid, gid = entry.pw_dir, entry.pw_uid, entry.pw_gid
 
-    ai_path = os.path.join(home, ".microcloud-ai.sh")
-    with open(ai_path, "w") as f:
-        f.write(f'export ANTHROPIC_BASE_URL="{base_url}"\n')
-        f.write(f'export ANTHROPIC_AUTH_TOKEN="{token}"\n')
-    os.chmod(ai_path, 0o600)
-    os.chown(ai_path, uid, gid)
+    claude_dir = os.path.join(home, ".claude")
+    os.makedirs(claude_dir, mode=0o700, exist_ok=True)
+    settings = os.path.join(claude_dir, "settings.json")
+    try:
+        has = os.path.exists(settings) and os.path.getsize(settings) > 0
+        cfg = json.load(open(settings)) if has else {}
+    except (ValueError, OSError):
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    env = cfg.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    env["ANTHROPIC_BASE_URL"] = base_url
+    env["ANTHROPIC_AUTH_TOKEN"] = token
+    cfg["env"] = env
+    tmp = settings + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, settings)
+    os.chmod(settings, 0o600)
 
-    # Make the login shell source it (idempotent).
-    profile = os.path.join(home, ".profile")
-    source_line = ". ~/.microcloud-ai.sh"
-    existing = open(profile).read() if os.path.exists(profile) else ""
-    if source_line not in existing:
-        with open(profile, "a") as f:
-            f.write(f"\n{source_line}\n")
-    if os.path.exists(profile):
-        os.chown(profile, uid, gid)
-
-    os.makedirs(os.path.join(home, ".claude"), mode=0o700, exist_ok=True)
+    # So interactive `claude` skips its first-run wizard and uses the configured relay directly.
     claude_json = os.path.join(home, ".claude.json")
     with open(claude_json, "w") as f:
         f.write('{"hasCompletedOnboarding":true}\n')
-    _chown_tree(os.path.join(home, ".claude"), name)
+    _chown_tree(claude_dir, name)
     os.chown(claude_json, uid, gid)
 
 
@@ -201,8 +222,8 @@ def main(argv: list[str]) -> int:
     create_user(args.user)
     if args.password_stdin:
         set_password_from_stdin(args.user)
-    if args.ssh_pubkey:
-        authorize_key(args.user, args.ssh_pubkey)
+    if args.ssh_pubkey or args.authorized_key:
+        authorize_key(args.user, args.ssh_pubkey or "", args.authorized_key)
     grant_sudo_and_docker(args.user)
     if args.ip:
         configure_network(args.interface, args.ip, args.gateway)

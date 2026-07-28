@@ -8,4 +8,5 @@ sudo
 ufw
 openssh-server
 python3
+tmux
 docker.io

@@ -77,6 +77,13 @@ class Machine(
     var aiStatus: AiStatus? = AiStatus.DISABLED,
     /** The newapi token id issued for this machine (NEWAPI mode), kept for teardown. */
     @Column(name = "newapi_token_id") var newapiTokenId: Int? = null,
+    /**
+     * This machine's id on ccproxy (its external tenant API), set at birth-init and used to drive /
+     * poll / tear down the subscription-login switch. Null = not registered with ccproxy (ccproxy
+     * not wired, or birth-init failed — the machine still works on newapi; a reprovision can
+     * retry).
+     */
+    @Column(name = "ccproxy_machine_id") var ccproxyMachineId: Long? = null,
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     var status: MachineStatus = MachineStatus.PROVISIONING,
