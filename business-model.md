@@ -8,10 +8,12 @@
 ## What MicroCloud is
 
 MicroCloud turns compute infrastructure (today: Proxmox VE) into a simple self-service API: an
-upstream service's users get real machines (Debian 13 with Docker, reachable over SSH on a private
-network — as either a lightweight **LXC container** or a full **VM**, chosen per template), billed
-against prepaid fund accounts. It is multi-tenant: each upstream service is a **tenant**, and each
-tenant has its own end-users.
+upstream service's users get real machines (Debian 13 with Docker, git, tmux and jujutsu, reachable
+over SSH on a private network — as either a lightweight **LXC container** or a full **VM**, chosen
+per template), each running Claude Code that reaches models through a **newapi** relay by default,
+switchable per machine to an official Anthropic **subscription** (via ccproxy). Machines carry
+prepaid fund accounts for compute and AI usage. It is multi-tenant: each upstream service is a
+**tenant**, and each tenant has its own end-users.
 
 In one line: MicroCloud is a **base service / IaaS control plane**, not traditional middleware — a
 self-contained, stateful, async service that upstreams call over REST to provision and bill machines,
@@ -122,17 +124,24 @@ type + one zone + one template.
 - **Customer** — one of the tenant's end-users, keyed by an `externalRef` (the tenant's own user id).
   A customer owns accounts and machines.
 - **Account** — a prepaid fund account under a customer. It is a generic ledger: a pure numeric
-  balance plus an immutable record of every change (top-up / charge / …). Compute (and, later, AI
-  usage) is billed against it. *Example:* a customer has a `compute` account topped up to 100.
+  balance plus an immutable record of every change. *Example:* a customer has a `compute` account
+  topped up to 100. Compute and AI usage are each *designated* to an account to charge (see Machine);
+  the account/ledger model and **top-up** are implemented, but the automatic metering that would
+  debit them for machine-time and AI usage is **designed, not yet implemented**.
 - **Machine** — a provisioned instance owned by a customer, created from an **offering** + a chosen
-  **hostname**, spec (within the offering type's ranges), login user + SSH key, and the fund account
-  to charge. Its lifecycle (create / start / stop / delete) is **asynchronous**: the API returns
-  immediately with a transitional status and the caller polls until a terminal one. MicroCloud
-  auto-selects the placement (backing the type, in the zone, with the template present and a free
-  IP) and leases the private IP — none of which the tenant sees.
-- **API key** *(planned, not yet implemented)* — a model-relay key (a newapi token bound to an
-  account) that a machine's Claude Code uses, so AI usage bills to that account, separately from the
-  machine's compute account.
+  **hostname**, spec (within the offering type's ranges), login user + SSH key, and **up to three
+  fund accounts to charge**: compute (`accountId`), plus newapi and ccproxy AI usage
+  (`newapiAccountId` / `ccproxyAccountId`, each defaulting to the compute account). Its lifecycle
+  (create / start / **shutdown** or stop / delete) is **asynchronous**: the API returns immediately
+  with a transitional status and the caller polls until a terminal one. MicroCloud auto-selects the
+  placement (backing the type, in the zone, with the template present and a free IP) and leases the
+  private IP — none of which the tenant sees.
+- **AI mode** — how a machine's Claude Code reaches models (`Machine.aiMode`, exposed with
+  `aiStatus`): a **newapi** relay by default (a per-machine token minted automatically), or an
+  official Anthropic **subscription** via [ccproxy](https://github.com/micro-teams/ccproxy),
+  switchable per machine (`POST /machine/{id}/ai/ccproxy`, back with `/ai/newapi`). Each stream bills
+  its own account. There is **no separate API-key resource** — the earlier "pre-create a key" design
+  was superseded by aiMode; the legacy `apiKeyId` field lingers only for back-compat.
 
 ## Worked example: from cluster to offering, and back to a landing spot
 

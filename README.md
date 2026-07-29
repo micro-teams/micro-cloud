@@ -51,8 +51,8 @@ flowchart TD
 ```
 
 - **nginx** — the one public origin; serves the SPA at `/` and proxies the backend at `/microcloud`.
-- **backend ("microcloud")** — Kotlin / Spring Boot. Tenants, customers, accounts, machines,
-  api-keys, billing, audit. Interfaces are **generated** from `MicroCloud-API.yml`.
+- **backend ("microcloud")** — Kotlin / Spring Boot. Tenants, customers, accounts, machines (incl.
+  their AI mode), offerings/placements, audit. Interfaces are **generated** from `MicroCloud-API.yml`.
 - **newapi** — our fork [`micro-teams/new-api`](https://github.com/micro-teams/new-api) (release
   `v1.0.0-rc.21`): the LLM relay + per-key quota/metering. MicroCloud orchestrates its admin API. It
   is the **default** of two AI modes: a machine can also be switched to a real Anthropic subscription
