@@ -215,6 +215,13 @@ class TemplateUploader(
                 buildScript,
                 prov.vmBakeTimeoutSeconds,
             )
+            // Flush the guest filesystem before the poweroff. stopVm below is a HARD stop
+            // (/status/stop = pull the plug), which does NOT sync the guest FS. build.sh's last
+            // writes (the jj binary from `install`, the cloud.cfg docker-group edit from `sed`) are
+            // still in the guest page cache — un-synced writes would be lost from the templated
+            // disk
+            // (apt's own writes survive only because dpkg fsyncs them). Sync so everything lands.
+            operatorSsh.run(prov.vmBakeUser, ip, "sync", prov.taskTimeoutSeconds)
             proxmoxClient.waitForTask(
                 cluster,
                 proxmoxClient.stopVm(cluster, node, vmid),
