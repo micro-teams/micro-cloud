@@ -54,9 +54,14 @@ flowchart TD
 - **backend ("microcloud")** — Kotlin / Spring Boot. Tenants, customers, accounts, machines,
   api-keys, billing, audit. Interfaces are **generated** from `MicroCloud-API.yml`.
 - **newapi** — our fork [`micro-teams/new-api`](https://github.com/micro-teams/new-api) (release
-  `v1.0.0-rc.21`): the LLM relay + per-key quota/metering. MicroCloud orchestrates its admin API.
+  `v1.0.0-rc.21`): the LLM relay + per-key quota/metering. MicroCloud orchestrates its admin API. It
+  is the **default** of two AI modes: a machine can also be switched to a real Anthropic subscription
+  behind [ccproxy](https://github.com/micro-teams/ccproxy) (`POST /machine/{id}/ai/ccproxy`, back with
+  `/ai/newapi`) — see `deploy/README.md`.
 - **Proxmox VE** — provisions the Debian 13 machine, as an LXC container (`templates/lxc/debian13/`)
-  or a full VM (`templates/vm/debian13/`) depending on the template's kind.
+  or a full VM (`templates/vm/debian13/`) depending on the template's kind. Machines ship Docker plus
+  `git` / `tmux` / `jujutsu (jj)`, and are powered off with a graceful `shutdown` (a hard `stop`
+  stays as a force fallback).
 - **Postgres** — MicroCloud's own schema `microcloud`.
 
 ## What is here
