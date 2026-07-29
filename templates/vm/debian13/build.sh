@@ -42,26 +42,16 @@ systemctl enable docker
 # git is added here so both offerings share the same baseline.
 apt-get install -y git
 
-# --- Rust toolchain (system-wide) + jujutsu (jj) ---
-# jujutsu is not in Debian 13 stable, so install the Rust toolchain (rustup, system-wide under
-# /opt/rust — rustc/cargo/rustup on every user's PATH, each user's cargo still writes to their own
-# ~/.cargo) and drop in jj from a PREBUILT release binary (compiling jj from source is far too slow
-# for a bake). build-essential/pkg-config stay so a user's own `cargo build` has a linker. KEEP THIS
-# BLOCK IN SYNC WITH templates/lxc/debian13/build.py.
-apt-get install -y --no-install-recommends build-essential pkg-config
-export RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust
-curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
-ln -sf /opt/rust/bin/cargo /opt/rust/bin/rustc /opt/rust/bin/rustup /usr/local/bin/
-echo 'export RUSTUP_HOME=/opt/rust' > /etc/profile.d/rust.sh
-chmod -R a+rX /opt/rust
-# jujutsu: resolve the latest release tag via the redirect, fetch the prebuilt musl binary, install jj.
+# --- jujutsu (jj) ---
+# A Git-compatible VCS not in Debian 13 stable. Install the official PREBUILT musl binary — it is
+# self-contained, so NO Rust toolchain is needed on the machine (that would add hundreds of MB for no
+# runtime benefit; anyone who wants Rust can install it themselves). The version is resolved from the
+# releases/latest redirect (no GitHub API). KEEP THIS BLOCK IN SYNC WITH templates/lxc/debian13/build.py.
 JJ_VER=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/jj-vcs/jj/releases/latest | sed 's#.*/tag/##')
 JJ_TMP=$(mktemp -d)
 curl -fsSL "https://github.com/jj-vcs/jj/releases/download/${JJ_VER}/jj-${JJ_VER}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C "$JJ_TMP"
 install -m755 "$(find "$JJ_TMP" -name jj -type f | head -1)" /usr/local/bin/jj
 rm -rf "$JJ_TMP"
-# Reset the bake env so the rest of the script is unaffected.
-unset RUSTUP_HOME CARGO_HOME
 
 # --- Put every cloud-init-created login user in the docker group ---
 # The Debian cloud image declares `system_info.default_user.groups` in a /etc/cloud/cloud.cfg.d
