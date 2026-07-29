@@ -506,7 +506,8 @@ function tenantNav(token: string): NavItem[] {
           onCreate={create(token, "/machine")}
           actions={[
             { label: "start", run: (row) => request("POST", `/machine/${row.id}/start`, t(token)) },
-            { label: "stop", run: (row) => request("POST", `/machine/${row.id}/stop`, t(token)) },
+            { label: "shutdown", run: (row) => request("POST", `/machine/${row.id}/shutdown`, t(token)) },
+            { label: "stop (force)", confirm: "HARD-stop (pull the plug, no FS flush)? Prefer shutdown.", run: (row) => request("POST", `/machine/${row.id}/stop`, t(token)) },
             // AI switch (super-admin): newapi relay <-> ccproxy subscription. Needs a super-admin
             // token; a human completes the ccproxy OAuth out of band, then aiStatus lands 'ready'.
             {

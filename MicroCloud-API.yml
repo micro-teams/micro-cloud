@@ -694,12 +694,22 @@ paths:
         "202": { description: "Accepted — start requested (status 'starting'); poll GET for 'running'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /machine/{id}/shutdown:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: shutdownMachine
+      summary: Gracefully shut a running machine down (async; ACPI, flushes the FS; preferred over stop)
+      responses:
+        "202": { description: "Accepted — shutdown requested (status 'stopping'); poll GET for 'stopped'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /machine/{id}/stop:
     parameters: [ { $ref: "#/components/parameters/IdPath" } ]
     post:
       tags: [machine]
       operationId: stopMachine
-      summary: Stop a running machine (async; does not destroy it)
+      summary: HARD-stop a running machine (async; pulls the plug, no FS flush — prefer /shutdown)
       responses:
         "202": { description: "Accepted — stop requested (status 'stopping'); poll GET for 'stopped'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
