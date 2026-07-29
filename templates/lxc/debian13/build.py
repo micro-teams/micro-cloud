@@ -107,6 +107,24 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker || true
 
+# Rust toolchain (system-wide) + jujutsu (jj). jujutsu is not in Debian 13 stable, so install the
+# Rust toolchain (rustup, system-wide under /opt/rust — rustc/cargo/rustup on every user's PATH, each
+# user's cargo still writes to their own ~/.cargo) and drop in jj from a PREBUILT release binary
+# (compiling jj from source is far too slow for a bake). build-essential/pkg-config stay so a user's
+# own `cargo build` has a linker. KEEP THIS BLOCK IN SYNC WITH templates/vm/debian13/build.sh.
+apt-get install -y --no-install-recommends build-essential pkg-config
+export RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust
+curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
+ln -sf /opt/rust/bin/cargo /opt/rust/bin/rustc /opt/rust/bin/rustup /usr/local/bin/
+echo 'export RUSTUP_HOME=/opt/rust' > /etc/profile.d/rust.sh
+chmod -R a+rX /opt/rust
+# jujutsu: resolve the latest release tag via the redirect, fetch the prebuilt musl binary, install jj.
+JJ_VER=$(curl -fsSLI -o /dev/null -w '%{{url_effective}}' https://github.com/jj-vcs/jj/releases/latest | sed 's#.*/tag/##')
+JJ_TMP=$(mktemp -d)
+curl -fsSL "https://github.com/jj-vcs/jj/releases/download/${{JJ_VER}}/jj-${{JJ_VER}}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C "$JJ_TMP"
+install -m755 "$(find "$JJ_TMP" -name jj -type f | head -1)" /usr/local/bin/jj
+rm -rf "$JJ_TMP"
+
 # Claude Code is NOT baked into the template — it is installed per-user at first boot by
 # init-machine.py (via claude.ai/install.sh). That keeps the template small, always installs the
 # latest, and runs the installer on a real running system rather than in this chroot (where its
