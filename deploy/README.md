@@ -66,8 +66,22 @@ first use, logs in, and mints tokens — no access tokens or URLs to configure. 
 
 Two things remain manual, both **inside newapi's own UI** (not MicroCloud): configure an upstream
 model **channel** (Anthropic, DeepSeek, …, with the provider key), and top up quota if needed.
-MicroCloud only mints/deletes per-machine tokens. (ccproxy — the subscription-backed alternative for
-heavy users — is a separate super-admin switch, not covered here.)
+MicroCloud only mints/deletes per-machine tokens.
+
+**ccproxy (optional — switch a machine to a real Anthropic subscription).** A machine can be switched
+from the newapi relay to an official subscription login behind [ccproxy](https://github.com/micro-teams/ccproxy)
+(`POST /machine/{id}/ai/ccproxy`, and back with `/ai/newapi`). It is **off unless wired**: leave the
+two `.env` vars below blank and the switch endpoints just return 400. To enable, register MicroCloud
+as a ccproxy tenant and paste its base URL + tenant secret:
+
+| Variable | Purpose |
+| --- | --- |
+| `CCPROXY_BASE_URL` | ccproxy tenant API base **including its path prefix**, e.g. `http://ccproxy-host/ccproxy` |
+| `CCPROXY_TENANT_SECRET` | the opaque tenant secret minted by ccproxy's super-admin — **never commit it** |
+
+Both are passed to the backend as `microcloud.ccproxy.{base-url,tenant-secret}`. The subscription
+OAuth itself is completed by a human on ccproxy's side; MicroCloud triggers it and polls
+`aiMode`/`aiStatus`. See the design docs (`tech/microcloud/06-ai-modes-ccproxy-switch.md`).
 
 ## Upgrades & the schema (`CREATE.sql`)
 
@@ -126,6 +140,18 @@ Note this release also drops `machine.kind` (kind is now a property of the place
 machine). `ddl-auto` never drops columns, so the old `machine.kind` column simply lingers unused on
 an existing DB — harmless; drop it by hand if you want it gone. Fresh deployments ship the correct
 schema and need none of this.
+
+### Upgrading to the 0.4.0 (ccproxy switch + graceful shutdown) release (one-time)
+
+No manual step. `ddl-auto=update` just adds the new **nullable** `machine.ccproxy_machine_id` column
+(a machine's id on ccproxy, null until it is registered there). New behaviour, no migration:
+
+- **ccproxy switch** is opt-in via the two `.env` vars above; blank = disabled.
+- **Graceful shutdown**: machines are now powered off with an ACPI `shutdown` (guest flushes its FS)
+  wherever possible — the new `POST /machine/{id}/shutdown` endpoint and the VM template bake both use
+  it. The old hard `POST /machine/{id}/stop` (pull the plug, no flush) stays as a force fallback.
+- Machine templates now preinstall `git`, `tmux`, and `jujutsu (jj)` on both LXC and VM offerings;
+  re-bake/rebuild templates to pick these up on existing deployments.
 
 ## Provisioning (reaching Proxmox and the machines)
 

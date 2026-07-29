@@ -13,9 +13,10 @@ removed; the conventions below are inherited and still authoritative.
   they can one day be extracted); the component scan covers both roots.
 - **Authorization is all in one place.** `org.rucca.cheese.auth` (`@Guard(action, resourceType)` +
   `AuthorizationAspect` + custom-logic expressions) is the whole model. The concrete rules live in
-  `app.microteams.microcloud.authz.RolePermissionService` — one row per endpoint, no authorization
-  in business code. Today it only grants the `/ping` smoke test; real rows (tenant/customer/account/
-  machine/api-key) are added there as endpoints land.
+  `app.microteams.microcloud.authz.RolePermissionService` — grants per (role, resource), no
+  authorization in business code. It grants the super-admin and tenant roles their full permission
+  sets (tenant/customer/account/machine/offering/placement/…); a machine's AI-mode switch is a
+  tenant grant scoped to owned machines.
 - **Persistence.** Postgres, schema `microcloud` (`hibernate.default_schema`). Entities extend
   `BaseEntity` (SEQUENCE id + created/updated/deletedAt), soft-delete via `@SQLRestriction`, enums as
   strings, and rely on the `all-open` compiler plugin (never make entities `data class`).

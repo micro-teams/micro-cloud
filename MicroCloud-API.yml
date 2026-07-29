@@ -26,8 +26,9 @@ servers:
 #   - tenantSecret : a tenant's auth secret (Bearer); scopes + audits every call. Tenant surface.
 #   - superAdmin   : the platform operator's session (Bearer). Admin surface.
 #
-# Not yet included (future): super-admin login endpoint, api-keys + newapi relay, usage/billing
-# metering, audit read APIs.
+# Not yet included (future): usage/billing metering that debits accounts (the account/ledger model
+# and top-up exist; automatic charging does not), and audit read APIs. (newapi relay + the newapi↔
+# ccproxy AI-mode switch ship; there is no separate api-key resource — AI is modeled by aiMode.)
 
 security:
   - tenantSecret: []
