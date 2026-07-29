@@ -36,6 +36,12 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
 
+# --- Base tools parity with the LXC template (templates/lxc/debian13/files/packages.txt) ---
+# A stock Debian cloud image ships neither git nor tmux, so the same workload behaved differently
+# depending on which offering it landed on. tmux is already installed above (ccproxy login needs it);
+# git is added here so both offerings share the same baseline.
+apt-get install -y git
+
 # --- Put every cloud-init-created login user in the docker group ---
 # The Debian cloud image declares `system_info.default_user.groups` in a /etc/cloud/cloud.cfg.d
 # drop-in that OVERRIDES the main /etc/cloud/cloud.cfg, so appending `docker` to the main file has no
