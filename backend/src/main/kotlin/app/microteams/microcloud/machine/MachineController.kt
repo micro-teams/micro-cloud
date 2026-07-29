@@ -342,17 +342,19 @@ class MachineController(
         return ResponseEntity(HttpStatus.ACCEPTED)
     }
 
-    // ---- Machine AI switch (super-admin): newapi relay <-> ccproxy subscription ----
+    // ---- Machine AI switch: newapi relay <-> ccproxy subscription. A tenant may switch its OWN
+    // machines (owned); super-admin may switch any. @ResourceId lets the "owned" check resolve the
+    // machine's owner tenant.
 
     @Guard("switch-machine-ccproxy", "machine")
     override fun switchMachineToCcproxy(
-        @PathVariable("id") id: IdType
+        @PathVariable("id") @ResourceId id: IdType
     ): ResponseEntity<MachineAiStatusDTO> =
         ResponseEntity.accepted().body(ccproxySwitchService.switchToCcproxy(id).toAiStatusDTO())
 
     @Guard("switch-machine-newapi", "machine")
     override fun switchMachineToNewapi(
-        @PathVariable("id") id: IdType
+        @PathVariable("id") @ResourceId id: IdType
     ): ResponseEntity<MachineAiStatusDTO> =
         ResponseEntity.ok(ccproxySwitchService.switchToNewapi(id).toAiStatusDTO())
 

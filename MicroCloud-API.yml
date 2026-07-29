@@ -709,14 +709,15 @@ paths:
     post:
       tags: [machine]
       operationId: switchMachineToCcproxy
-      summary: "Switch a machine's Claude Code to a ccproxy subscription login (super-admin)"
+      summary: "Switch a machine's Claude Code to a ccproxy subscription login"
       description: >-
         Register the machine with ccproxy if needed and start its subscription login; a human
         login-operator completes the OAuth on ccproxy's side. Returns immediately with aiStatus
         'provisioning'; MicroCloud polls ccproxy in the background and lands 'ready' once the
         credential is captured, at which point ccproxy has flipped the machine to the official
-        endpoint. Poll GET /machine for aiStatus.
-      security: [{ superAdmin: [] }]
+        endpoint. Poll GET /machine for aiStatus. A tenant may switch its OWN machines; super-admin
+        may switch any.
+      security: [{ tenantSecret: [] }, { superAdmin: [] }]
       responses:
         "202": { description: "Accepted — login started", content: { application/json: { schema: { $ref: "#/components/schemas/MachineAiStatus" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -727,12 +728,13 @@ paths:
     post:
       tags: [machine]
       operationId: switchMachineToNewapi
-      summary: "Switch a machine's Claude Code back to the newapi relay (super-admin)"
+      summary: "Switch a machine's Claude Code back to the newapi relay"
       description: >-
         Restore the machine's newapi relay config (ccproxy removes it on the way to official but
         never restores it) and free the ccproxy account. A running Claude keeps its in-memory
-        config; the next one started uses newapi.
-      security: [{ superAdmin: [] }]
+        config; the next one started uses newapi. A tenant may switch its OWN machines; super-admin
+        may switch any.
+      security: [{ tenantSecret: [] }, { superAdmin: [] }]
       responses:
         "200": { description: "OK — switched back to newapi", content: { application/json: { schema: { $ref: "#/components/schemas/MachineAiStatus" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }

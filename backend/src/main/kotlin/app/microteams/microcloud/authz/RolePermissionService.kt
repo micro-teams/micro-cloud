@@ -154,7 +154,16 @@ class RolePermissionService {
                     grant(listOf("create-machine"), "machine"),
                     grant(listOf("list-machine"), "machine", "queried-customer-is-own-machine"),
                     grant(
-                        listOf("get-machine", "start-machine", "stop-machine", "delete-machine"),
+                        listOf(
+                            "get-machine",
+                            "start-machine",
+                            "stop-machine",
+                            "delete-machine",
+                            // A tenant may switch the AI mode of its OWN machines (bills its own
+                            // newapi/ccproxy accounts); super-admin may switch any.
+                            "switch-machine-ccproxy",
+                            "switch-machine-newapi",
+                        ),
                         "machine",
                         "owned",
                     ),

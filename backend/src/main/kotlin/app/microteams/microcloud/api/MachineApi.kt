@@ -1157,10 +1157,10 @@ interface MachineApi {
 
     @Operation(
         tags = ["machine"],
-        summary = "Switch a machine's Claude Code to a ccproxy subscription login (super-admin)",
+        summary = "Switch a machine's Claude Code to a ccproxy subscription login",
         operationId = "switchMachineToCcproxy",
         description =
-            """Register the machine with ccproxy if needed and start its subscription login; a human login-operator completes the OAuth on ccproxy's side. Returns immediately with aiStatus 'provisioning'; MicroCloud polls ccproxy in the background and lands 'ready' once the credential is captured, at which point ccproxy has flipped the machine to the official endpoint. Poll GET /machine for aiStatus.""",
+            """Register the machine with ccproxy if needed and start its subscription login; a human login-operator completes the OAuth on ccproxy's side. Returns immediately with aiStatus 'provisioning'; MicroCloud polls ccproxy in the background and lands 'ready' once the credential is captured, at which point ccproxy has flipped the machine to the official endpoint. Poll GET /machine for aiStatus. A tenant may switch its OWN machines; super-admin may switch any.""",
         responses =
             [
                 ApiResponse(
@@ -1179,7 +1179,8 @@ interface MachineApi {
                     content = [Content(schema = Schema(implementation = ErrorDTO::class))],
                 ),
             ],
-        security = [SecurityRequirement(name = "superAdmin")],
+        security =
+            [SecurityRequirement(name = "tenantSecret"), SecurityRequirement(name = "superAdmin")],
     )
     @RequestMapping(
         method = [RequestMethod.POST],
@@ -1194,10 +1195,10 @@ interface MachineApi {
 
     @Operation(
         tags = ["machine"],
-        summary = "Switch a machine's Claude Code back to the newapi relay (super-admin)",
+        summary = "Switch a machine's Claude Code back to the newapi relay",
         operationId = "switchMachineToNewapi",
         description =
-            """Restore the machine's newapi relay config (ccproxy removes it on the way to official but never restores it) and free the ccproxy account. A running Claude keeps its in-memory config; the next one started uses newapi.""",
+            """Restore the machine's newapi relay config (ccproxy removes it on the way to official but never restores it) and free the ccproxy account. A running Claude keeps its in-memory config; the next one started uses newapi. A tenant may switch its OWN machines; super-admin may switch any.""",
         responses =
             [
                 ApiResponse(
@@ -1216,7 +1217,8 @@ interface MachineApi {
                     content = [Content(schema = Schema(implementation = ErrorDTO::class))],
                 ),
             ],
-        security = [SecurityRequirement(name = "superAdmin")],
+        security =
+            [SecurityRequirement(name = "tenantSecret"), SecurityRequirement(name = "superAdmin")],
     )
     @RequestMapping(
         method = [RequestMethod.POST],
