@@ -204,11 +204,15 @@ class TemplateUploader(
                 prov.taskTimeoutSeconds,
             )
             operatorSsh.waitForSsh(ip, prov.sshReadyTimeoutSeconds)
-            operatorSsh.runScript(
+            // Run build.sh from a remote FILE (not piped to `bash -s`): a command in the script
+            // that
+            // reads stdin (apt/needrestart/debconf on a real install) would otherwise eat the rest
+            // of
+            // the piped script and truncate it silently. See runScriptFromFile.
+            operatorSsh.runScriptFromFile(
                 prov.vmBakeUser,
                 ip,
                 buildScript,
-                "sudo bash -s",
                 prov.vmBakeTimeoutSeconds,
             )
             proxmoxClient.waitForTask(

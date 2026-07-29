@@ -69,6 +69,12 @@ class OperatorSsh(private val config: MicroCloudConfig) {
      * Pipe [scriptFile] to [remoteCommand] (which must read the script from its stdin, e.g. `sudo
      * bash -s` or `sudo python3 - --user x`) on [ip] as [user]; throw with output on a non-zero
      * exit.
+     *
+     * CAVEAT for `bash -s`: bash reads the script from stdin line-by-line AS it runs, so any
+     * command in the script that itself reads stdin (apt/needrestart/debconf during a real install,
+     * …) will consume the REST of the not-yet-executed script, silently truncating it — bash then
+     * hits EOF and exits 0. For a bash script use [runScriptFromFile] instead, which is immune.
+     * `python3 -` is safe here because python reads the whole program before executing it.
      */
     fun runScript(
         user: String,
@@ -82,6 +88,25 @@ class OperatorSsh(private val config: MicroCloudConfig) {
             exec(baseArgs(keyPath, user, ip) + remoteCommand, scriptFile, timeoutSeconds)
         if (code != 0) throw IllegalStateException("piped script on $ip failed ($code): $output")
         log.info("piped script on {} ({}) succeeded", ip, remoteCommand)
+    }
+
+    /**
+     * Run a bash [scriptFile] as [user] on [ip], immune to the stdin-draining truncation above: the
+     * script is streamed into a temp file on the remote (`cat` consumes ALL of stdin into it
+     * FIRST), then executed as `sudo bash <file> < /dev/null` — so bash reads the program from the
+     * file and every command's stdin is /dev/null, and nothing can eat the script. Throws with
+     * output on a non-zero exit. Used for VM template bakes.
+     */
+    fun runScriptFromFile(user: String, ip: String, scriptFile: File, timeoutSeconds: Long) {
+        val keyPath = privateKeyPath() ?: throw IllegalStateException("no operator SSH key")
+        // ${'$'} = a literal shell $ (evaluated on the remote, not by Kotlin).
+        val d = "${'$'}"
+        val remote =
+            "f=${d}(mktemp) && cat > \"${d}f\" && sudo bash \"${d}f\" < /dev/null; " +
+                "rc=${d}?; rm -f \"${d}f\"; exit ${d}rc"
+        val (code, output) = exec(baseArgs(keyPath, user, ip) + remote, scriptFile, timeoutSeconds)
+        if (code != 0) throw IllegalStateException("bake script on $ip failed ($code): $output")
+        log.info("bake script on {} succeeded", ip)
     }
 
     private fun baseArgs(keyPath: String, user: String, ip: String): List<String> =
