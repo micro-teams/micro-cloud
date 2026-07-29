@@ -215,10 +215,17 @@ class TemplateUploader(
                 buildScript,
                 prov.vmBakeTimeoutSeconds,
             )
+            // Power off with a GRACEFUL shutdown, never a hard stop: an ACPI shutdown makes the
+            // guest
+            // flush its filesystem before powering off, so build.sh's last writes (the jj binary
+            // from
+            // `install`, the cloud.cfg docker-group edit) are on disk when we `qm template` it. A
+            // hard
+            // stop (/status/stop) skips the flush and those un-synced writes are silently lost.
             proxmoxClient.waitForTask(
                 cluster,
-                proxmoxClient.stopVm(cluster, node, vmid),
-                prov.taskTimeoutSeconds,
+                proxmoxClient.shutdownVm(cluster, node, vmid),
+                prov.vmBakeTimeoutSeconds,
             )
             waitForVmStopped(cluster, node, vmid, prov.taskTimeoutSeconds)
 

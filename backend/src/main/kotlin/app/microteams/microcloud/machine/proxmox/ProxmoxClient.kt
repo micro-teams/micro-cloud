@@ -212,8 +212,13 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
     fun startVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/start", emptyMap()).asText()
 
+    /** HARD stop (pull the plug): no guest FS sync. Prefer [shutdownVm] except when destroying. */
     fun stopVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/stop", emptyMap()).asText()
+
+    /** Graceful ACPI shutdown: the guest flushes its filesystem and powers off cleanly. UPID. */
+    fun shutdownVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/shutdown", emptyMap()).asText()
 
     /** Destroy a VM (purge its config + disks, including unreferenced ones). */
     fun destroyVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
@@ -271,8 +276,13 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
     fun startLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/lxc/$vmid/status/start", emptyMap()).asText()
 
+    /** HARD stop (pull the plug): no guest FS sync. Prefer [shutdownLxc]. */
     fun stopLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/lxc/$vmid/status/stop", emptyMap()).asText()
+
+    /** Graceful shutdown: the container flushes its filesystem and powers off cleanly. UPID. */
+    fun shutdownLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/lxc/$vmid/status/shutdown", emptyMap()).asText()
 
     /** Destroy an LXC (purge its config + disks; force even if running). */
     fun destroyLxc(cluster: ProxmoxCluster, node: String, vmid: Int): String =

@@ -252,6 +252,18 @@ class MachineService(
         return machine.toDTO()
     }
 
+    /** Graceful shutdown (ACPI): the guest flushes its FS and powers off cleanly. Preferred. */
+    fun shutdownMachine(tenantId: IdType, id: IdType): MachineDTO {
+        val machine = getMachine(tenantId, id)
+        if (machine.status == MachineStatus.RUNNING) {
+            machine.status = MachineStatus.STOPPING
+            machineRepository.save(machine)
+            afterCommit { provisioner.shutdownCt(id) } // async graceful shutdown -> STOPPED / ERROR
+        }
+        return machine.toDTO()
+    }
+
+    /** HARD stop (pull the plug): no FS flush. Force path; prefer [shutdownMachine]. */
     fun stopMachine(tenantId: IdType, id: IdType): MachineDTO {
         val machine = getMachine(tenantId, id)
         if (machine.status == MachineStatus.RUNNING) {

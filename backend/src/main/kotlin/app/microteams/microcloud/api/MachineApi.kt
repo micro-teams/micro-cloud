@@ -1093,6 +1093,39 @@ interface MachineApi {
 
     @Operation(
         tags = ["machine"],
+        summary =
+            "Gracefully shut a running machine down (async; ACPI, flushes the FS; preferred over stop)",
+        operationId = "shutdownMachine",
+        description = """""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "202",
+                    description =
+                        "Accepted — shutdown requested (status 'stopping'); poll GET for 'stopped'",
+                    content = [Content(schema = Schema(implementation = MachineDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "tenantSecret")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/shutdown"],
+        produces = ["application/json"],
+    )
+    fun shutdownMachine(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
+    ): ResponseEntity<MachineDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
         summary = "Start a stopped machine (async; poll for status)",
         operationId = "startMachine",
         description = """""",
@@ -1125,7 +1158,8 @@ interface MachineApi {
 
     @Operation(
         tags = ["machine"],
-        summary = "Stop a running machine (async; does not destroy it)",
+        summary =
+            "HARD-stop a running machine (async; pulls the plug, no FS flush — prefer /shutdown)",
         operationId = "stopMachine",
         description = """""",
         responses =

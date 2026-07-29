@@ -343,7 +343,26 @@ class MachineProvisioner(
             }
         }
 
-    /** Async stop (pct/qm per kind): STOPPING -> STOPPED / ERROR. */
+    /**
+     * Async graceful shutdown (pct/qm per kind): STOPPING -> STOPPED / ERROR. Guest flushes its FS.
+     */
+    @Async
+    @Transactional
+    fun shutdownCt(machineId: Long) =
+        runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
+            machine.vmid?.let {
+                val upid =
+                    when (kindOf(machine)) {
+                        MachineKind.PROXMOX_LXC -> proxmoxClient.shutdownLxc(cluster, node, it)
+                        MachineKind.PROXMOX_VM -> proxmoxClient.shutdownVm(cluster, node, it)
+                    }
+                proxmoxClient.waitForTask(cluster, upid, timeout())
+            }
+        }
+
+    /**
+     * Async HARD stop (pct/qm per kind): STOPPING -> STOPPED / ERROR. Force path; prefer shutdown.
+     */
     @Async
     @Transactional
     fun stopCt(machineId: Long) =
