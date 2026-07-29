@@ -1,10 +1,11 @@
 # MicroCloud
 
-A base service that, given **Proxmox** and **newapi**, provisions machines with a working
-**Claude Code**, makes them reachable over SSH on a private network, and bills each user for both
-**machine compute** and **AI usage**. It is consumed by upstream services (Cheese, MicroTeams, …);
-each has its own users, and MicroCloud owns the mapping from `(tenant, external user)` to accounts
-and quota.
+A base service that provisions **Debian 13** machines (LXC or VM) on **Proxmox**, each with a working
+**Claude Code** reachable over SSH on a private network. A machine's Claude Code runs on a **newapi**
+relay by default, switchable per machine to an official Anthropic **subscription** (via ccproxy). It
+is consumed by upstream services (Cheese, MicroTeams, …); each has its own users, and MicroCloud owns
+the mapping from `(tenant, external user)` to the **fund accounts and quota** that machine compute and
+AI usage draw on.
 
 > **What it is:** a platform-layer **base service / IaaS control plane** — not traditional
 > middleware. Upstream services call its REST API to provision and bill machines; it abstracts the
