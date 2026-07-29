@@ -64,6 +64,75 @@ flowchart TD
   stays as a force fallback).
 - **Postgres** — MicroCloud's own schema `microcloud`.
 
+### The whole picture — compute + AI modes + ccproxy
+
+One diagram tying it together: MicroCloud provisions a machine on Proxmox (LXC or VM); the machine's
+Claude Code takes its model access one of two ways, switchable per machine; and the ccproxy path
+shows the MITM token-swap that lets many machines share one Anthropic subscription without ever
+holding the real credential.
+
+```mermaid
+flowchart TB
+    caller(["upstream / test SPA<br/>tenant secret"])
+
+    subgraph MC["MicroCloud · IaaS control plane"]
+        mcbe["backend · Kotlin/Spring<br/>tenants · accounts · machines · billing<br/>+ AI-mode switch"]
+        mcpg[("Postgres")]
+        newapi["newapi relay<br/>per-machine token + quota / metering"]
+        mcbe --- mcpg
+        mcbe -->|"admin API: tokens / usage"| newapi
+    end
+    caller -->|"REST /microcloud (via nginx)"| mcbe
+
+    subgraph PVE["Proxmox VE · compute provider"]
+        lxc["Debian 13 LXC"]
+        vm["Debian 13 VM"]
+    end
+    mcbe -->|"provision + init-machine.py (pct / qm)"| lxc
+    mcbe --> vm
+
+    subgraph MACH["a provisioned machine · LXC or VM"]
+        cc["Claude Code"]
+        sj["~/.claude/settings.json · env block<br/>HTTPS_PROXY → engine (set at birth)<br/>ANTHROPIC_* = newapi (NEWAPI mode)<br/>— those keys removed → official (CCPROXY mode)"]
+        cc -. reads .-> sj
+    end
+    lxc -. hosts .-> MACH
+    vm -. hosts .-> MACH
+
+    subgraph CP["CCProxy · subscription + billing MITM"]
+        cpbe["backend · control plane / ledger<br/>account pool · machines · usage"]
+        eng["proxy-engine<br/>:3128 MITM · :9000 control<br/>holds fake ↔ real token map"]
+        egress["account egress-proxy<br/>stable outbound IP"]
+        oper(["login-operator · human OAuth"])
+        cpbe -->|"register session / prime login"| eng
+        oper -->|"paste OAuth code"| cpbe
+    end
+
+    cc ==>|"HTTPS_PROXY · always via engine"| eng
+    eng -->|"NEWAPI: non-anthropic → pass-through"| newapi
+    newapi -->|"upstream channel + key"| models["real upstream models<br/>DeepSeek / Anthropic API / …"]
+    eng ==>|"CCPROXY: MITM api.anthropic.com,<br/>swap fake → real token"| egress
+    egress --> anth["api.anthropic.com<br/>official subscription"]
+
+    mcbe -->|"switch: ccproxy tenant API<br/>POST /machine/{id}/login → poll"| cpbe
+    cpbe -->|"SSH edit settings.json:<br/>add proxy keys; strip newapi keys on success"| sj
+    mcbe -->|"switch-back: SSH restore newapi keys<br/>+ DELETE ccproxy machine"| sj
+```
+
+Reading it:
+
+- **Two AI modes, one machine** (the thick arrows are the machine's Claude traffic). The proxy points
+  at the ccproxy engine from birth, so switching only changes what is in `settings.json`, never the
+  network path. **NEWAPI** (default): `ANTHROPIC_BASE_URL/AUTH_TOKEN` point at newapi; the engine sees
+  a non-Anthropic host and passes it straight through to newapi → real upstream models. **CCPROXY**
+  (switched): those keys are gone, so Claude hits `api.anthropic.com`; the engine MITMs it and swaps
+  the machine's **fake** token for the account's **real** subscription token — the real credential
+  never touches the machine.
+- **The switch** is MicroCloud calling ccproxy's tenant API and editing the shared `settings.json`
+  over SSH (each side owns its own keys); the one-time OAuth is completed by a human login-operator.
+- **If ccproxy is not wired**, the engine simply isn't there: machines run NEWAPI with Claude talking
+  to newapi directly, and the `/ai/ccproxy` switch is unavailable.
+
 ## What is here
 
 | | |
