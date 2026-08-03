@@ -53,6 +53,7 @@ jobs:
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: jar
           path: backend/target/*.jar
 
@@ -73,6 +74,7 @@ jobs:
       - name: Upload dist
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: frontend-dist
           path: frontend/dist
 
@@ -130,6 +132,7 @@ jobs:
         run: sudo python3 templates/lxc/debian13/build.py --output dist/debian13-microcloud.tar.zst
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: lxc-template
           path: dist/debian13-microcloud.tar.zst
 
@@ -177,6 +180,7 @@ jobs:
           echo "== bundle contents =="; find "$STAGE" -maxdepth 3 -type f | sort
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: microcloud-deploy
           path: microcloud-deploy
 
