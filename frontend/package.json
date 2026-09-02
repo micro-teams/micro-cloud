@@ -1,7 +1,7 @@
 {
   "name": "microcloud-frontend",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,8 +13,6 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.3.4",
