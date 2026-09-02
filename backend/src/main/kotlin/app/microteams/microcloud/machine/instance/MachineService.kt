@@ -17,6 +17,9 @@ package app.microteams.microcloud.machine.instance
 import app.microteams.microcloud.account.AccountService
 import app.microteams.microcloud.common.helper.PageHelper
 import app.microteams.microcloud.customer.CustomerService
+import app.microteams.microcloud.machine.ai.AiMode
+import app.microteams.microcloud.machine.ai.AiStatus
+import app.microteams.microcloud.machine.ai.CcproxyClient
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.offering.OfferingService
 import app.microteams.microcloud.machine.placement.PlacementService
@@ -84,6 +87,7 @@ class MachineService(
     private val templateRepository:
         app.microteams.microcloud.machine.template.MachineTemplateRepository,
     private val provisioner: MachineProvisioner,
+    private val ccproxyClient: CcproxyClient,
 ) {
     private companion object {
         // RFC1123 hostname: dot-separated labels of [a-zA-Z0-9-], no leading/trailing hyphen, each
@@ -105,6 +109,15 @@ class MachineService(
 
     fun getOwnerTenant(id: IdType): IdType =
         machineRepository.findById(id).orElseThrow { NotFoundError("machine", id) }.tenantId!!
+
+    /** The requested AI mode, NEWAPI when the caller says nothing; a 400 for a word we lack. */
+    private fun parseAiMode(raw: String?): AiMode {
+        val word = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return AiMode.NEWAPI
+        return AiMode.entries.firstOrNull { it.name.equals(word, ignoreCase = true) }
+            ?: throw BadRequestError(
+                "aiMode must be one of ${AiMode.entries.joinToString { it.name.lowercase() }}"
+            )
+    }
 
     private fun requireInRange(value: Int, min: Int, max: Int, label: String) {
         if (value < min || value > max)
@@ -151,10 +164,13 @@ class MachineService(
         // The machine's form (proxmox/lxc, proxmox/vm) follows from the placement it lands on; the
         // provisioner reads it from the placement. Nothing kind-related is stored on the machine.
 
-        // AI mode: every machine defaults to NEWAPI (fully automatic — a per-machine relay token,
-        // usable immediately, no human step). ccproxy is only ever reached via a super-admin
-        // switch,
-        // never chosen at create. If newapi isn't wired, the machine simply gets no AI.
+        // AI mode, decided at create. NEWAPI is the default (fully automatic — a per-machine
+        // relay token, usable immediately, no human step). CCPROXY starts the subscription login
+        // as soon as the machine runs, instead of provisioning newapi first and being switched
+        // later, which set the AI channel up twice. NONE wires no AI at all.
+        val aiMode = parseAiMode(request.aiMode)
+        if (aiMode == AiMode.CCPROXY && !ccproxyClient.isConfigured())
+            throw BadRequestError("aiMode ccproxy: ccproxy is not configured on this deployment")
 
         // Flush the insert so @CreationTimestamp is assigned before we mutate + save again for the
         // IP.
@@ -179,8 +195,9 @@ class MachineService(
                     networkId = network,
                     loginUser = request.user,
                     sshPubkey = request.sshPubkey,
-                    aiMode = app.microteams.microcloud.machine.ai.AiMode.NEWAPI,
-                    aiStatus = app.microteams.microcloud.machine.ai.AiStatus.PROVISIONING,
+                    aiMode = aiMode,
+                    aiStatus =
+                        if (aiMode == AiMode.NONE) AiStatus.DISABLED else AiStatus.PROVISIONING,
                 )
             )
         machine.ip = networkService.allocateIp(network, machine.id!!)

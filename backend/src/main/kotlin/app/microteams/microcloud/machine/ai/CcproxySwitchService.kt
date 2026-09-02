@@ -62,7 +62,19 @@ class CcproxySwitchService(
             machine.ccproxyMachineId = m.id
             machineRepository.save(machine)
         }
-        val ccId = machine.ccproxyMachineId!!
+        beginLogin(machine)
+        return machine
+    }
+
+    /**
+     * Start the subscription login on a machine already registered with ccproxy, and poll it to
+     * READY in the background. Shared by the super-admin switch and by a machine created with
+     * aiMode=ccproxy, whose provisioner calls this the moment the machine runs.
+     */
+    fun beginLogin(machine: Machine) {
+        val ccId =
+            machine.ccproxyMachineId
+                ?: throw BadRequestError("machine ${machine.id} is not registered with ccproxy")
         // A previous login the operator never completed leaves the machine stuck in `loggingIn`;
         // cancel it so this (re)switch can start a fresh login instead of 409-ing.
         cancelActiveLogin(ccId)
@@ -74,7 +86,6 @@ class CcproxySwitchService(
         machineRepository.save(machine)
 
         loginPoller.pollLoginToReady(machine.id!!, ccId)
-        return machine
     }
 
     /**

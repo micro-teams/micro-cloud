@@ -1361,6 +1361,10 @@ components:
           format: int64
           nullable: true
           description: "(legacy, optional) a pre-created model key to bind; superseded by aiMode"
+        aiMode:
+          type: string
+          nullable: true
+          description: "How this machine's Claude Code reaches models, decided at create: newapi (default; a per-machine relay token, usable as soon as the machine runs), ccproxy (the subscription login starts as soon as the machine runs, a human login-operator completes the OAuth on ccproxy's side, and aiStatus lands ready when it does; 400 if ccproxy is not configured), or none. Without this a ccproxy machine had to be created on newapi and switched once running, which provisioned its AI channel twice."
       required: [customerId, accountId, hostname, offeringId, cores, memoryMb, diskGb, user]
     ListMachinesResponse:
       type: object
