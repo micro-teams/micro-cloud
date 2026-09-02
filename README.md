@@ -144,6 +144,7 @@ Reading it:
 | **`templates/lxc/debian13/`** | The LXC machine template, as stdlib-Python routines the service calls: `build.py` (packages the template tarball) + `init-machine.py` (initializes a provisioned machine) + `files/`. |
 | **`templates/vm/debian13/`** | The VM machine template: an `image-url` (base cloud image) + `build.sh` (baked into a Proxmox VM template: Docker + docker group) + `init-machine.py` (per-machine setup, piped over SSH after cloud-init). |
 | **`deploy/`** | docker-compose (nginx + backend + newapi + postgres), bind-mounted stock images. |
+| **`RELEASING.md`** | How a merged change reaches production and gets a version: bundle, operator, templates, verify, release. |
 
 ## Build & run
 
