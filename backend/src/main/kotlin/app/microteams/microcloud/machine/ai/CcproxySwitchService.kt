@@ -24,6 +24,7 @@ import org.rucca.cheese.common.error.BadRequestError
 import org.rucca.cheese.common.error.NotFoundError
 import org.rucca.cheese.common.persistent.IdType
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -124,6 +125,25 @@ class CcproxySwitchService(
         machine.aiStatus = AiStatus.READY
         machineRepository.save(machine)
         return machine
+    }
+
+    /**
+     * The birth-time login start for a machine created with aiMode=ccproxy, run after the
+     * provisioner's transaction has committed. Deliberately not transactional: the login start
+     * blocks on ccproxy's own provisioning of the machine (up to two minutes), and the poller it
+     * hands off to writes aiStatus from another thread — a transaction open across either would
+     * have its closing save overwrite what the poller wrote. Every save here commits at once.
+     */
+    @Async
+    fun beginLoginAfterProvision(machineId: IdType) {
+        val machine = machineRepository.findById(machineId).orElse(null) ?: return
+        try {
+            beginLogin(machine)
+        } catch (e: Exception) {
+            log.error("ccproxy login for machine {} could not start: {}", machineId, e.message, e)
+            machine.aiStatus = AiStatus.ERROR
+            machineRepository.save(machine)
+        }
     }
 
     /** Cancel the machine's current login-request if one is in progress (best-effort). */

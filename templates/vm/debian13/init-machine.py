@@ -229,7 +229,10 @@ def main(argv: list[str]) -> int:
         configure_network(args.interface, args.ip, args.gateway)
     if args.anthropic_base_url and args.anthropic_token:
         write_ai_config(args.user, args.anthropic_base_url, args.anthropic_token)
-        install_claude(args.user)
+    # Claude Code is installed whatever the AI mode: a machine born on ccproxy gets no
+    # newapi relay args at all, and ccproxy-connector's preflight refuses a machine
+    # without `claude` (machine 502, 2026-09-02). Only the relay config is newapi's.
+    install_claude(args.user)
     if not args.no_harden:
         harden()
 
