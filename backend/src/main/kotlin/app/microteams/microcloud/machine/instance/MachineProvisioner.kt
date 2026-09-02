@@ -115,11 +115,20 @@ class MachineProvisioner(
             }
 
             machine.status = MachineStatus.RUNNING
-            if (machine.aiStatus != AiStatus.ERROR) aiProvider.onReady(machine)
             // Birth-init on ccproxy: register the machine so its Claude is pointed at the engine
             // (unregistered → tunneled through, no account consumed) from birth, ready for a later
             // subscription switch. Best-effort — a failure never affects the machine or its newapi.
+            // Before onReady, because a machine created with aiMode=ccproxy starts its login in
+            // onReady and needs the registration to exist.
             registerWithCcproxy(machine)
+            if (machine.aiStatus != AiStatus.ERROR) {
+                try {
+                    aiProvider.onReady(machine)
+                } catch (e: Exception) {
+                    log.error("AI setup for machine {} failed: {}", machine.id, e.message, e)
+                    machine.aiStatus = AiStatus.ERROR
+                }
+            }
             machineRepository.save(machine)
             log.info(
                 "machine {} is RUNNING ({} {})",

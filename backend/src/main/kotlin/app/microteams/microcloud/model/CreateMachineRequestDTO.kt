@@ -16,6 +16,12 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param ccproxyAccountId account for ccproxy AI usage; defaults to accountId if omitted
  * @param sshPubkey SSH public key to authorize for the user
  * @param apiKeyId (legacy, optional) a pre-created model key to bind; superseded by aiMode
+ * @param aiMode How this machine's Claude Code reaches models, decided at create: newapi (default;
+ *   a per-machine relay token, usable as soon as the machine runs), ccproxy (the subscription login
+ *   starts as soon as the machine runs, a human login-operator completes the OAuth on ccproxy's
+ *   side, and aiStatus lands ready when it does; 400 if ccproxy is not configured), or none.
+ *   Without this a ccproxy machine had to be created on newapi and switched once running, which
+ *   provisioned its AI channel twice.
  */
 data class CreateMachineRequestDTO(
     @Schema(example = "null", required = true, description = "")
@@ -83,4 +89,11 @@ data class CreateMachineRequestDTO(
     )
     @get:JsonProperty("apiKeyId")
     val apiKeyId: kotlin.Long? = null,
+    @Schema(
+        example = "null",
+        description =
+            "How this machine's Claude Code reaches models, decided at create: newapi (default; a per-machine relay token, usable as soon as the machine runs), ccproxy (the subscription login starts as soon as the machine runs, a human login-operator completes the OAuth on ccproxy's side, and aiStatus lands ready when it does; 400 if ccproxy is not configured), or none. Without this a ccproxy machine had to be created on newapi and switched once running, which provisioned its AI channel twice.",
+    )
+    @get:JsonProperty("aiMode")
+    val aiMode: kotlin.String? = null,
 ) {}
