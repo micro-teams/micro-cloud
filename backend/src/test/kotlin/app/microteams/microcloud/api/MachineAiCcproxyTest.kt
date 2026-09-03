@@ -15,6 +15,7 @@ package app.microteams.microcloud.api
 import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.ai.CcproxyClient
 import app.microteams.microcloud.machine.ai.CcproxyLoginPoller
+import app.microteams.microcloud.machine.ai.CcproxyLoginRequest
 import app.microteams.microcloud.machine.ai.CcproxyMachine
 import app.microteams.microcloud.machine.ai.NewapiClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
@@ -25,7 +26,6 @@ import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.every
-import io.mockk.justRun
 import io.mockk.verify
 import org.json.JSONObject
 import org.junit.jupiter.api.Test
@@ -90,7 +90,7 @@ constructor(
             )
         every { ccproxyClient.createMachine(any(), any(), any(), any()) } returns registered
         every { ccproxyClient.getMachine(9) } returns registered
-        justRun { ccproxyClient.startLogin(9) }
+        every { ccproxyClient.startLogin(9) } returns CcproxyLoginRequest(1, "preparing", null)
 
         val admin =
             JSONObject(

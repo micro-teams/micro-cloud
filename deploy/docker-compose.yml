@@ -54,6 +54,10 @@ services:
         condition: service_healthy
     working_dir: /app
     command: ["java", "-jar", "/app/backend.jar"]
+    # The default json-file log dies with its container: a `docker compose up -d` on 2026-09-02
+    # deleted the only record of what happened to machine 553. journald outlives the container.
+    logging:
+      driver: journald
     environment:
       # The backend derives absolute URLs from X-Forwarded-* (no domain baked in); ddl-auto=update
       # creates its tables in the "microcloud" schema on first boot.

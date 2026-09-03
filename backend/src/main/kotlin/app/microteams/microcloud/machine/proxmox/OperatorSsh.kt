@@ -58,17 +58,21 @@ class OperatorSsh(private val config: MicroCloudConfig) {
         throw IllegalStateException("$ip did not become SSH-reachable within ${timeoutSeconds}s")
     }
 
-    /** Run [remote] on [ip] as [user] over SSH; throw with the output on a non-zero exit. */
-    fun run(user: String, ip: String, remote: String, timeoutSeconds: Long) {
+    /**
+     * Run [remote] on [ip] as [user] over SSH and return its output (stdout + stderr); throw with
+     * the output on a non-zero exit.
+     */
+    fun run(user: String, ip: String, remote: String, timeoutSeconds: Long): String {
         val keyPath = privateKeyPath() ?: throw IllegalStateException("no operator SSH key")
         val (code, output) = exec(baseArgs(keyPath, user, ip) + remote, null, timeoutSeconds)
         if (code != 0) throw IllegalStateException("ssh '$remote' on $ip failed ($code): $output")
+        return output
     }
 
     /**
      * Pipe [scriptFile] to [remoteCommand] (which must read the script from its stdin, e.g. `sudo
-     * bash -s` or `sudo python3 - --user x`) on [ip] as [user]; throw with output on a non-zero
-     * exit.
+     * bash -s` or `sudo python3 - --user x`) on [ip] as [user] and return its output (stdout +
+     * stderr); throw with output on a non-zero exit.
      *
      * CAVEAT for `bash -s`: bash reads the script from stdin line-by-line AS it runs, so any
      * command in the script that itself reads stdin (apt/needrestart/debconf during a real install,
@@ -82,12 +86,13 @@ class OperatorSsh(private val config: MicroCloudConfig) {
         scriptFile: File,
         remoteCommand: String,
         timeoutSeconds: Long,
-    ) {
+    ): String {
         val keyPath = privateKeyPath() ?: throw IllegalStateException("no operator SSH key")
         val (code, output) =
             exec(baseArgs(keyPath, user, ip) + remoteCommand, scriptFile, timeoutSeconds)
         if (code != 0) throw IllegalStateException("piped script on $ip failed ($code): $output")
         log.info("piped script on {} ({}) succeeded", ip, remoteCommand)
+        return output
     }
 
     /**

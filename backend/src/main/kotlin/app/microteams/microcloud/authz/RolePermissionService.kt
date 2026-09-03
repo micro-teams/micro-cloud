@@ -119,6 +119,9 @@ class RolePermissionService {
                     ),
                     // Switch a machine's Claude Code between newapi and ccproxy (operator action).
                     grant(listOf("switch-machine-ccproxy", "switch-machine-newapi"), "machine"),
+                    // The event log is the operator's record of what happened to a machine, so the
+                    // super-admin reads any machine's — the one machine read it holds.
+                    grant(listOf("list-machine-events"), "machine"),
                 ),
         )
 
@@ -164,6 +167,7 @@ class RolePermissionService {
                             // newapi/ccproxy accounts); super-admin may switch any.
                             "switch-machine-ccproxy",
                             "switch-machine-newapi",
+                            "list-machine-events",
                         ),
                         "machine",
                         "owned",

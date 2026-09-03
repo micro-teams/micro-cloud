@@ -24,6 +24,7 @@ import app.microteams.microcloud.machine.template.TemplateService
 import app.microteams.microcloud.machine.type.MachineTypeService
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
+import java.time.OffsetDateTime
 import javax.annotation.PostConstruct
 import org.rucca.cheese.auth.AuthenticationService
 import org.rucca.cheese.auth.AuthorizationService
@@ -346,6 +347,21 @@ class MachineController(
     override fun deleteMachine(@PathVariable("id") @ResourceId id: IdType): ResponseEntity<Unit> {
         machineService.deleteMachine(tenantId(), id)
         return ResponseEntity(HttpStatus.ACCEPTED)
+    }
+
+    @Guard("list-machine-events", "machine")
+    override fun listMachineEvents(
+        @PathVariable("id") @ResourceId id: IdType,
+        pageStart: Long?,
+        pageSize: Int,
+        since: OffsetDateTime?,
+    ): ResponseEntity<ListMachineEventsResponseDTO> {
+        // Super-admin reads any machine's log (it is the operator's debugging tool); a tenant its
+        // own — the guard's "owned" predicate already refused anyone else, the service re-checks.
+        val scope = if (isSuperAdmin()) null else tenantId()
+        val (items, page) =
+            machineService.listEvents(scope, id, since?.toInstant(), pageStart, pageSize)
+        return ResponseEntity.ok(ListMachineEventsResponseDTO(items = items, page = page))
     }
 
     // ---- Machine AI switch: newapi relay <-> ccproxy subscription. A tenant may switch its OWN

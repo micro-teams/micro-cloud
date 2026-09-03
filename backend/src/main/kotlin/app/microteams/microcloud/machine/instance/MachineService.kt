@@ -28,6 +28,8 @@ import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.type.MachineType
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
+import java.time.Instant
+import java.time.ZoneOffset
 import org.rucca.cheese.common.error.BadRequestError
 import org.rucca.cheese.common.error.NotFoundError
 import org.rucca.cheese.common.persistent.IdType
@@ -72,6 +74,18 @@ fun Machine.toDTO() =
         createdAt = this.createdAt?.atOffset(java.time.ZoneOffset.UTC),
     )
 
+fun MachineEvent.toDTO() =
+    MachineEventDTO(
+        id = this.id!!,
+        machineId = this.machineId!!,
+        at = this.at!!.atOffset(ZoneOffset.UTC),
+        action = MachineEventActionDTO.valueOf(this.action!!.name),
+        phase = MachineEventPhaseDTO.valueOf(this.phase!!.name),
+        level = MachineEventLevelDTO.valueOf(this.level!!.name),
+        message = this.message!!,
+        detail = this.detail,
+    )
+
 @Service
 @Transactional
 class MachineService(
@@ -88,6 +102,7 @@ class MachineService(
         app.microteams.microcloud.machine.template.MachineTemplateRepository,
     private val provisioner: MachineProvisioner,
     private val ccproxyClient: CcproxyClient,
+    private val eventRepository: MachineEventRepository,
 ) {
     private companion object {
         // RFC1123 hostname: dot-separated labels of [a-zA-Z0-9-], no leading/trailing hyphen, each
@@ -107,8 +122,35 @@ class MachineService(
 
     fun getMachineDTO(tenantId: IdType, id: IdType): MachineDTO = getMachine(tenantId, id).toDTO()
 
+    /**
+     * The owning tenant, for the "owned" authorization predicate. Deliberately sees soft-deleted
+     * machines: a deleted machine's event log is still its tenant's to read, so the guard must
+     * resolve the owner rather than 404 — the lookups behind every other endpoint still 404 on a
+     * deleted machine themselves.
+     */
     fun getOwnerTenant(id: IdType): IdType =
-        machineRepository.findById(id).orElseThrow { NotFoundError("machine", id) }.tenantId!!
+        machineRepository.findTenantIdIncludingDeleted(id) ?: throw NotFoundError("machine", id)
+
+    /**
+     * The machine's event log, oldest first. [tenantId] null = the super-admin reading any machine;
+     * otherwise the machine must belong to that tenant (404 if not). Works for a deleted machine:
+     * only the owner lookup is needed, and that one sees deleted rows.
+     */
+    fun listEvents(
+        tenantId: IdType?,
+        id: IdType,
+        since: Instant?,
+        pageStart: IdType?,
+        pageSize: Int,
+    ): Pair<List<MachineEventDTO>, PageDTO> {
+        val owner = getOwnerTenant(id)
+        if (tenantId != null && owner != tenantId) throw NotFoundError("machine", id)
+        val all =
+            if (since == null) eventRepository.findByMachineIdOrderByAtAscIdAsc(id)
+            else eventRepository.findByMachineIdAndAtGreaterThanEqualOrderByAtAscIdAsc(id, since)
+        val (page, info) = PageHelper.pageFromAll(all, pageStart, pageSize, { it.id!! }, null)
+        return page.map { it.toDTO() } to info
+    }
 
     /** The requested AI mode, NEWAPI when the caller says nothing; a 400 for a word we lack. */
     private fun parseAiMode(raw: String?): AiMode {

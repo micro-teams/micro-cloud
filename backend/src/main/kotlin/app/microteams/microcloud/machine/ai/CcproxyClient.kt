@@ -24,6 +24,9 @@ import java.time.Duration
 import org.rucca.cheese.common.error.BadRequestError
 import org.springframework.stereotype.Component
 
+/** The login ccproxy started for a machine: its id (what a cancel needs) and the account bound. */
+data class CcproxyLoginRequest(val id: Long?, val status: String, val accountEmail: String?)
+
 /** A machine as ccproxy sees it (the subset MicroCloud drives its switch on). */
 data class CcproxyMachine(
     val id: Long,
@@ -75,10 +78,16 @@ class CcproxyClient(private val config: MicroCloudConfig, private val objectMapp
     /**
      * Start (or restart) this machine's subscription login. ccproxy binds an account here (409 if
      * the pool is empty), registers the engine session, and drives the OAuth in a tmux session; a
-     * human login-operator completes the browser step on ccproxy's side. 202 Accepted.
+     * human login-operator completes the browser step on ccproxy's side. 202 Accepted with the
+     * LoginRequest it opened.
      */
-    fun startLogin(id: Long) {
-        call("POST", "/machine/$id/login", "")
+    fun startLogin(id: Long): CcproxyLoginRequest {
+        val data = call("POST", "/machine/$id/login", "")
+        return CcproxyLoginRequest(
+            id = data.path("id").let { if (it.isNumber) it.asLong() else null },
+            status = data.path("status").asText(""),
+            accountEmail = data.path("accountEmail").let { if (it.isTextual) it.asText() else null },
+        )
     }
 
     /**

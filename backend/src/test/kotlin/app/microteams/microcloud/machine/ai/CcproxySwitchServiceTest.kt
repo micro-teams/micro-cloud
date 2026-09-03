@@ -15,6 +15,7 @@ package app.microteams.microcloud.machine.ai
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
 import app.microteams.microcloud.machine.instance.Machine
+import app.microteams.microcloud.machine.instance.MachineEventRecorder
 import app.microteams.microcloud.machine.instance.MachineRepository
 import io.mockk.every
 import io.mockk.mockk
@@ -34,6 +35,7 @@ class CcproxySwitchServiceTest {
     private val settingsSsh = mockk<MachineSettingsSsh>(relaxed = true)
     private val loginPoller = mockk<CcproxyLoginPoller>(relaxed = true)
     private val config = MicroCloudConfig().apply { newapi.machineBaseUrl = "http://host/newapi" }
+    private val events = mockk<MachineEventRecorder>(relaxed = true)
 
     private val service =
         CcproxySwitchService(
@@ -43,6 +45,7 @@ class CcproxySwitchServiceTest {
             settingsSsh,
             loginPoller,
             config,
+            events,
         )
 
     init {

@@ -221,14 +221,17 @@ constructor(
         }
 
         // Wait until provisioning finished (the machine has a vmid to act on), then delete it: the
-        // VM branch must go through destroyVmGracefully (which stops a running VM before
-        // destroying,
-        // since qm destroy refuses a running VM) — never the LXC destroy path.
+        // VM branch must qm-stop the (not "stopped") VM before qm-destroying it, since qm destroy
+        // refuses a running VM — and never take the LXC destroy path.
         waitForStatus(machineId, "running", secret)
         mockMvc
             .perform(delete("/machine/$machineId").header("Authorization", "Bearer $secret"))
             .andExpect(status().isAccepted)
-        verify(timeout = 5000) { proxmoxClient.destroyVmGracefully(any(), eq("pve"), any(), any()) }
+        verify(timeout = 5000) { proxmoxClient.destroyVm(any(), eq("pve"), any()) }
+        verifyOrder {
+            proxmoxClient.stopVm(any(), eq("pve"), any())
+            proxmoxClient.destroyVm(any(), eq("pve"), any())
+        }
         verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
     }
 
