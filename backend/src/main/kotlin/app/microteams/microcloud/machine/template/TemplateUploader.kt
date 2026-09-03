@@ -178,7 +178,17 @@ class TemplateUploader(
                 put("memory", prov.vmBakeMemoryMb.toString())
                 put("cpu", "host")
                 put("scsihw", "virtio-scsi-single")
-                put("scsi0", "${placement.storage}:0,import-from=$importStorage:import/$imageName")
+                // discard=on: the disk is thin-provisioned, and without it blocks a guest frees
+                // stay allocated in the pool for the VM's whole life (three CI runners sat at
+                // 95-98% of their volumes with 55% used inside, 2026-09-03). agent=1: the
+                // guest image ships qemu-guest-agent, but it only talks to the host once the
+                // VM has the device, and with it the host can read usage and fstrim without
+                // logging in. Both are inherited by every clone of the template.
+                put(
+                    "scsi0",
+                    "${placement.storage}:0,import-from=$importStorage:import/$imageName,discard=on",
+                )
+                put("agent", "1")
                 put("ide2", "${placement.storage}:cloudinit")
                 put("boot", "order=scsi0")
                 put("serial0", "socket")
