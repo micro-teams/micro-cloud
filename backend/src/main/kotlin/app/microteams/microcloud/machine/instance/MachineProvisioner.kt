@@ -298,7 +298,15 @@ class MachineProvisioner(
                 put("ipconfig0", "ip=${machine.ip}/${network.prefixLength},gw=${network.gateway}")
             },
         )
-        proxmoxClient.resizeVmDisk(cluster, node, vmid, "scsi0", "${machine.diskGb}G")
+        // The resize is a task that holds the VM's config lock while the volume grows; a start
+        // issued before it finishes fails with "can't lock file ... got timeout" whenever the
+        // storage is slow enough for the resize to outlast qm start's 10 s lock wait (three
+        // times on pve119 on 2026-09-03). Wait for it like every other task here.
+        proxmoxClient.waitForTask(
+            cluster,
+            proxmoxClient.resizeVmDisk(cluster, node, vmid, "scsi0", "${machine.diskGb}G"),
+            config.provisioning.taskTimeoutSeconds,
+        )
         proxmoxClient.waitForTask(
             cluster,
             proxmoxClient.startVm(cluster, node, vmid),

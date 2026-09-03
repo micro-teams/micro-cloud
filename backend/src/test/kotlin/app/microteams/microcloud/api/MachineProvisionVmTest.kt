@@ -22,7 +22,9 @@ import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
+import io.mockk.every
 import io.mockk.verify
+import io.mockk.verifyOrder
 import org.json.JSONObject
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -183,6 +185,9 @@ constructor(
                 )
                 .getLong("id")
 
+        every { proxmoxClient.resizeVmDisk(any(), any(), any(), any(), any()) } returns
+            "UPID:pve:resize-task"
+
         val res =
             mockMvc
                 .perform(
@@ -203,6 +208,17 @@ constructor(
         // LXC path.
         verify(timeout = 5000) { proxmoxClient.cloneVm(any(), eq("pve"), eq(9000), any()) }
         verify(exactly = 0) { proxmoxClient.createLxc(any(), any(), any()) }
+
+        // The disk resize is a Proxmox task that holds the VM's config lock until the volume has
+        // grown, and qm start gives up on that lock after 10 s. So the start must come only after
+        // the resize task was awaited — a start fired straight after the resize call failed with
+        // "can't lock file ... got timeout" on a slow thin pool (pve119, VM 147, 2026-09-03).
+        verify(timeout = 5000) { proxmoxClient.startVm(any(), eq("pve"), any()) }
+        verifyOrder {
+            proxmoxClient.resizeVmDisk(any(), eq("pve"), any(), eq("scsi0"), any())
+            proxmoxClient.waitForTask(any(), eq("UPID:pve:resize-task"), any())
+            proxmoxClient.startVm(any(), eq("pve"), any())
+        }
 
         // Wait until provisioning finished (the machine has a vmid to act on), then delete it: the
         // VM branch must go through destroyVmGracefully (which stops a running VM before
