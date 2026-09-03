@@ -34,6 +34,11 @@ START WITH
     1 INCREMENT BY 50;
 
 CREATE
+    SEQUENCE microcloud.machine_event_seq
+START WITH
+    1 INCREMENT BY 50;
+
+CREATE
     SEQUENCE microcloud.machine_seq
 START WITH
     1 INCREMENT BY 50;
@@ -247,6 +252,57 @@ CREATE
                     'DELETING',
                     'DELETED',
                     'ERROR'
+                )
+            ),
+            PRIMARY KEY(id)
+        );
+
+CREATE
+    TABLE
+        microcloud.machine_event(
+            AT TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP(6) NOT NULL,
+            deleted_at TIMESTAMP(6),
+            id BIGINT NOT NULL,
+            machine_id BIGINT NOT NULL,
+            tenant_id BIGINT NOT NULL,
+            updated_at TIMESTAMP(6) NOT NULL,
+            message VARCHAR(512) NOT NULL,
+            ACTION VARCHAR(255) NOT NULL CHECK(
+                ACTION IN(
+                    'PROVISION',
+                    'START',
+                    'SHUTDOWN',
+                    'STOP',
+                    'DELETE',
+                    'AI_SWITCH',
+                    'AI_LOGIN'
+                )
+            ),
+            detail text,
+            LEVEL VARCHAR(255) NOT NULL CHECK(
+                LEVEL IN(
+                    'INFO',
+                    'WARN',
+                    'ERROR'
+                )
+            ),
+            phase VARCHAR(255) NOT NULL CHECK(
+                phase IN(
+                    'STARTED',
+                    'PVE_TASK_SUBMITTED',
+                    'PVE_TASK_DONE',
+                    'SSH_REACHABLE',
+                    'INIT_DONE',
+                    'CCPROXY_REGISTERED',
+                    'AI_SETUP_FAILED',
+                    'RUNNING',
+                    'LOGIN_STARTED',
+                    'LOGIN_POLLED',
+                    'LOGIN_READY',
+                    'LOGIN_CANCELLED',
+                    'DONE',
+                    'FAILED'
                 )
             ),
             PRIMARY KEY(id)
@@ -507,6 +563,10 @@ CREATE
         tenant_id,
         customer_id
     );
+
+CREATE
+    INDEX IDX8t6lip552mxoh6rqp7ggsowua ON
+    microcloud.machine_event(machine_id);
 
 CREATE
     INDEX idx_template_name ON
