@@ -54,13 +54,21 @@ services:
         condition: service_healthy
     working_dir: /app
     command: ["java", "-jar", "/app/backend.jar"]
+    # The default json-file log dies with its container: a `docker compose up -d` on 2026-09-02
+    # deleted the only record of what happened to machine 553. journald outlives the container.
+    logging:
+      driver: journald
     environment:
       # The backend derives absolute URLs from X-Forwarded-* (no domain baked in); ddl-auto=update
-      # creates its tables in the "microcloud" schema on first boot.
+      # creates its tables in the "microcloud" schema on first boot. The pool is 20 rather than
+      # Hikari's 10 because a provision in flight holds two connections (its own transaction plus
+      # the event log's REQUIRES_NEW writes); set here and not in the defaults, since the test
+      # suite runs several Spring contexts against one Postgres and 20 each exhausts it.
       SPRING_APPLICATION_JSON: >-
         {"spring.datasource.url":"jdbc:postgresql://postgres:5432/${POSTGRES_DB}",
         "spring.datasource.username":"${POSTGRES_USER}",
         "spring.datasource.password":"${POSTGRES_PASSWORD}",
+        "spring.datasource.hikari.maximum-pool-size":20,
         "spring.jpa.hibernate.ddl-auto":"update",
         "application.jwt-secret":"${JWT_SECRET}",
         "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}",

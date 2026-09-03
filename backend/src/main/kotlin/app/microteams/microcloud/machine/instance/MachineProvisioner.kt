@@ -4,7 +4,9 @@
  *               applies the leased IP, waits for it to run, and (optionally) SSHs in to run
  *               init-machine.py (-> RUNNING / ERROR). startCt / stopCt run the matching pct task
  *               (-> RUNNING / STOPPED / ERROR); destroyCt tears the CT down, releases its IP, and
- *               removes the row. A machine still provisioning (no vmid yet) has no CT to act on.
+ *               soft-deletes the row. A machine still provisioning (no vmid yet) has no CT to act on.
+ *               Every step writes to the machine's event log (MachineEventRecorder): each Proxmox
+ *               task with its UPID and duration, the SSH wait, the init output, and every failure.
  *
  *  Author(s):
  *      Nictheboy Li    <nictheboy@outlook.com>
@@ -19,6 +21,20 @@ import app.microteams.microcloud.machine.ai.AiMode
 import app.microteams.microcloud.machine.ai.AiProviderRegistry
 import app.microteams.microcloud.machine.ai.AiStatus
 import app.microteams.microcloud.machine.ai.CcproxyClient
+import app.microteams.microcloud.machine.instance.MachineEventAction.DELETE
+import app.microteams.microcloud.machine.instance.MachineEventAction.PROVISION
+import app.microteams.microcloud.machine.instance.MachineEventLevel.ERROR
+import app.microteams.microcloud.machine.instance.MachineEventLevel.WARN
+import app.microteams.microcloud.machine.instance.MachineEventPhase.AI_SETUP_FAILED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.CCPROXY_REGISTERED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.DONE
+import app.microteams.microcloud.machine.instance.MachineEventPhase.FAILED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.INIT_DONE
+import app.microteams.microcloud.machine.instance.MachineEventPhase.PVE_TASK_DONE
+import app.microteams.microcloud.machine.instance.MachineEventPhase.PVE_TASK_SUBMITTED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.RUNNING
+import app.microteams.microcloud.machine.instance.MachineEventPhase.SSH_REACHABLE
+import app.microteams.microcloud.machine.instance.MachineEventPhase.STARTED
 import app.microteams.microcloud.machine.network.Network
 import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
@@ -34,6 +50,7 @@ import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import java.io.File
 import java.security.SecureRandom
+import java.time.LocalDateTime
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Async
 import org.springframework.stereotype.Component
@@ -52,6 +69,7 @@ class MachineProvisioner(
     private val operatorSsh: OperatorSsh,
     private val aiRegistry: AiProviderRegistry,
     private val ccproxyClient: CcproxyClient,
+    private val events: MachineEventRecorder,
 ) {
     private val log = LoggerFactory.getLogger(MachineProvisioner::class.java)
     private val random = SecureRandom()
@@ -74,6 +92,7 @@ class MachineProvisioner(
             val network = networkService.getNetwork(machine.networkId!!)
             val cluster = proxmoxService.getCluster(placement.clusterId!!)
             val node = placement.node!!
+            val kind = placement.effectiveKind
 
             // createMachine only lands on a placement where the template is DONE-uploaded, so this
             // always resolves; the throw is a defensive guard.
@@ -87,6 +106,17 @@ class MachineProvisioner(
                                 "${machine.placementId}"
                         )
                     }
+            events.record(
+                machine,
+                PROVISION,
+                STARTED,
+                "provisioning started on ${cluster.name}/$node as ${kind.wire}",
+                detail =
+                    "cluster=${cluster.name}\nnode=$node\nkind=${kind.wire}\n" +
+                        "template=${templateName(machine)}\noffering=${machine.offeringId}\n" +
+                        "cores=${machine.cores}\nmemoryMb=${machine.memoryMb}\n" +
+                        "diskGb=${machine.diskGb}\nip=${machine.ip}\naiMode=${machine.aiMode}",
+            )
 
             // Resolve the AI provider and mint/prepare its per-machine config BEFORE init, so the
             // init-machine.py run can apply it. AI setup is orthogonal to the machine: a failure
@@ -96,7 +126,14 @@ class MachineProvisioner(
                 try {
                     aiProvider.prepareInit(machine)
                 } catch (e: Exception) {
-                    log.error("AI prepare for machine {} failed: {}", machine.id, e.message, e)
+                    events.record(
+                        machine,
+                        PROVISION,
+                        AI_SETUP_FAILED,
+                        "AI setup (${machine.aiMode}) failed before init: ${e.message}",
+                        ERROR,
+                        cause = e,
+                    )
                     machine.aiStatus = AiStatus.ERROR
                     ""
                 }
@@ -107,7 +144,7 @@ class MachineProvisioner(
             // machine, independent of aiMode.
             val initSuffix = aiInitSuffix + authorizedKeyArgs()
 
-            when (placement.effectiveKind) {
+            when (kind) {
                 MachineKind.PROXMOX_LXC ->
                     provisionLxc(machine, upload, placement, network, cluster, initSuffix)
                 MachineKind.PROXMOX_VM ->
@@ -125,22 +162,84 @@ class MachineProvisioner(
                 try {
                     aiProvider.onReady(machine)
                 } catch (e: Exception) {
-                    log.error("AI setup for machine {} failed: {}", machine.id, e.message, e)
+                    events.record(
+                        machine,
+                        PROVISION,
+                        AI_SETUP_FAILED,
+                        "AI setup (${machine.aiMode}) failed: ${e.message}",
+                        ERROR,
+                        cause = e,
+                    )
                     machine.aiStatus = AiStatus.ERROR
                 }
             }
             machineRepository.save(machine)
-            log.info(
-                "machine {} is RUNNING ({} {})",
-                machine.id,
-                placement.effectiveKind.wire,
-                machine.vmid,
+            events.record(
+                machine,
+                PROVISION,
+                RUNNING,
+                "machine is running as ${kind.wire} ${machine.vmid} at ${machine.ip}",
             )
         } catch (e: Exception) {
-            log.error("provisioning machine {} failed: {}", machineId, e.message, e)
+            events.record(
+                machine,
+                PROVISION,
+                FAILED,
+                "provisioning failed: ${e.message}",
+                ERROR,
+                cause = e,
+            )
             machine.status = MachineStatus.ERROR
             machineRepository.save(machine)
         }
+    }
+
+    private fun templateName(machine: Machine): String? =
+        templateRepository.findById(machine.templateId!!).map { it.name }.orElse(null)
+
+    /**
+     * Submit-and-await one Proxmox task, recording its submission (with the UPID) and completion
+     * (with the duration) on the machine's event log. A task that fails or times out throws from
+     * [ProxmoxClient.waitForTask] with the UPID in the message, so the caller's FAILED event
+     * carries it — the `qm start` lock timeout of 2026-09-03 was only visible in Proxmox's own task
+     * index until then.
+     */
+    private fun awaitTask(
+        machine: Machine,
+        action: MachineEventAction,
+        what: String,
+        cluster: ProxmoxCluster,
+        upid: String,
+    ) {
+        events.record(machine, action, PVE_TASK_SUBMITTED, "$what submitted", detail = "upid=$upid")
+        val started = System.nanoTime()
+        proxmoxClient.waitForTask(cluster, upid, timeout())
+        val ms = (System.nanoTime() - started) / 1_000_000
+        events.record(
+            machine,
+            action,
+            PVE_TASK_DONE,
+            "$what finished in $ms ms",
+            detail = "upid=$upid\nduration_ms=$ms",
+        )
+    }
+
+    /**
+     * `pct start` / `qm start` returning does NOT mean the guest is reachable — it's still booting
+     * (sshd not up, network not ready). Wait until TCP :22 accepts a connection, and record how
+     * long that took.
+     */
+    private fun awaitSsh(machine: Machine) {
+        val started = System.nanoTime()
+        operatorSsh.waitForSsh(machine.ip!!, config.provisioning.sshReadyTimeoutSeconds)
+        val ms = (System.nanoTime() - started) / 1_000_000
+        events.record(
+            machine,
+            PROVISION,
+            SSH_REACHABLE,
+            "${machine.ip} accepts SSH connections after $ms ms",
+            detail = "duration_ms=$ms",
+        )
     }
 
     /**
@@ -174,9 +273,22 @@ class MachineProvisioner(
                     label = machine.hostname,
                 )
             machine.ccproxyMachineId = m.id
-            log.info("machine {} registered with ccproxy as {}", machine.id, m.id)
+            events.record(
+                machine,
+                PROVISION,
+                CCPROXY_REGISTERED,
+                "registered with ccproxy as machine ${m.id}",
+                detail = "ccproxyMachineId=${m.id}\nstatus=${m.status}",
+            )
         } catch (e: Exception) {
-            log.warn("ccproxy birth-init for machine {} failed: {}", machine.id, e.message)
+            events.record(
+                machine,
+                PROVISION,
+                CCPROXY_REGISTERED,
+                "ccproxy registration failed, the machine runs without it: ${e.message}",
+                WARN,
+                cause = e,
+            )
         }
     }
 
@@ -217,11 +329,12 @@ class MachineProvisioner(
             put("start", "1")
         }
 
-        log.info("provisioning machine {} as {}/CT{}", machine.id, node, vmid)
-        proxmoxClient.waitForTask(
+        awaitTask(
+            machine,
+            PROVISION,
+            "pct create CT$vmid on $node (from $ostemplate, started)",
             cluster,
             proxmoxClient.createLxc(cluster, node, params),
-            config.provisioning.taskTimeoutSeconds,
         )
         machine.vmid = vmid
         machineRepository.save(machine)
@@ -255,14 +368,10 @@ class MachineProvisioner(
                     "VM template upload ${upload.id} has no baked template vmid"
                 )
         val vmid = proxmoxClient.nextVmid(cluster)
-        log.info(
-            "provisioning machine {} as {}/VM{} (clone of {})",
-            machine.id,
-            node,
-            vmid,
-            templateVmid,
-        )
-        proxmoxClient.waitForTask(
+        awaitTask(
+            machine,
+            PROVISION,
+            "qm clone VM$vmid from template VM$templateVmid on $node",
             cluster,
             proxmoxClient.cloneVm(
                 cluster,
@@ -275,7 +384,6 @@ class MachineProvisioner(
                     put("full", "1")
                 },
             ),
-            config.provisioning.taskTimeoutSeconds,
         )
         machine.vmid = vmid
         machineRepository.save(machine)
@@ -302,17 +410,21 @@ class MachineProvisioner(
         // issued before it finishes fails with "can't lock file ... got timeout" whenever the
         // storage is slow enough for the resize to outlast qm start's 10 s lock wait (three
         // times on pve119 on 2026-09-03). Wait for it like every other task here.
-        proxmoxClient.waitForTask(
+        awaitTask(
+            machine,
+            PROVISION,
+            "qm resize VM$vmid scsi0 to ${machine.diskGb}G",
             cluster,
             proxmoxClient.resizeVmDisk(cluster, node, vmid, "scsi0", "${machine.diskGb}G"),
-            config.provisioning.taskTimeoutSeconds,
         )
-        proxmoxClient.waitForTask(
+        awaitTask(
+            machine,
+            PROVISION,
+            "qm start VM$vmid",
             cluster,
             proxmoxClient.startVm(cluster, node, vmid),
-            config.provisioning.taskTimeoutSeconds,
         )
-        operatorSsh.waitForSsh(machine.ip!!, config.provisioning.sshReadyTimeoutSeconds)
+        awaitSsh(machine)
         runVmInit(machine, aiInitSuffix)
     }
 
@@ -324,8 +436,7 @@ class MachineProvisioner(
     private fun runVmInit(machine: Machine, aiInitSuffix: String) {
         val command = config.provisioning.vmInitCommand?.takeIf { it.isNotBlank() } ?: return
         if (operatorSsh.privateKeyPath() == null || operatorSsh.publicKey() == null) return
-        val templateName =
-            templateRepository.findById(machine.templateId!!).map { it.name }.orElse(null) ?: return
+        val templateName = templateName(machine) ?: return
         val script = File("${config.templatesDir}/vm/$templateName/init-machine.py")
         if (!script.isFile) {
             log.info("VM template {} ships no init-machine.py; skipping VM init", templateName)
@@ -335,28 +446,38 @@ class MachineProvisioner(
             command
                 .replace("{user}", machine.loginUser ?: "")
                 .replace("{sshPubkey}", machine.sshPubkey ?: "") + aiInitSuffix
-        operatorSsh.runScript(
-            machine.loginUser!!,
-            machine.ip!!,
-            script,
-            remote,
-            config.provisioning.taskTimeoutSeconds,
+        val started = System.nanoTime()
+        val output =
+            operatorSsh.runScript(
+                machine.loginUser!!,
+                machine.ip!!,
+                script,
+                remote,
+                config.provisioning.taskTimeoutSeconds,
+            )
+        val ms = (System.nanoTime() - started) / 1_000_000
+        events.record(
+            machine,
+            PROVISION,
+            INIT_DONE,
+            "init-machine finished in $ms ms",
+            detail = output.ifBlank { null },
         )
-        log.info("VM init-machine for machine {} succeeded", machine.id)
     }
 
     /** Async start (pct/qm per kind): STARTING -> RUNNING / ERROR. */
     @Async
     @Transactional
     fun startCt(machineId: Long) =
-        runTask(machineId, MachineStatus.RUNNING) { machine, cluster, node ->
+        runTask(machineId, MachineEventAction.START, MachineStatus.RUNNING) { machine, cluster, node
+            ->
             machine.vmid?.let {
-                val upid =
-                    when (kindOf(machine)) {
-                        MachineKind.PROXMOX_LXC -> proxmoxClient.startLxc(cluster, node, it)
-                        MachineKind.PROXMOX_VM -> proxmoxClient.startVm(cluster, node, it)
-                    }
-                proxmoxClient.waitForTask(cluster, upid, timeout())
+                when (kindOf(machine)) {
+                    MachineKind.PROXMOX_LXC ->
+                        "pct start CT$it on $node" to proxmoxClient.startLxc(cluster, node, it)
+                    MachineKind.PROXMOX_VM ->
+                        "qm start VM$it on $node" to proxmoxClient.startVm(cluster, node, it)
+                }
             }
         }
 
@@ -366,14 +487,18 @@ class MachineProvisioner(
     @Async
     @Transactional
     fun shutdownCt(machineId: Long) =
-        runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
+        runTask(machineId, MachineEventAction.SHUTDOWN, MachineStatus.STOPPED) {
+            machine,
+            cluster,
+            node ->
             machine.vmid?.let {
-                val upid =
-                    when (kindOf(machine)) {
-                        MachineKind.PROXMOX_LXC -> proxmoxClient.shutdownLxc(cluster, node, it)
-                        MachineKind.PROXMOX_VM -> proxmoxClient.shutdownVm(cluster, node, it)
-                    }
-                proxmoxClient.waitForTask(cluster, upid, timeout())
+                when (kindOf(machine)) {
+                    MachineKind.PROXMOX_LXC ->
+                        "pct shutdown CT$it on $node" to
+                            proxmoxClient.shutdownLxc(cluster, node, it)
+                    MachineKind.PROXMOX_VM ->
+                        "qm shutdown VM$it on $node" to proxmoxClient.shutdownVm(cluster, node, it)
+                }
             }
         }
 
@@ -383,18 +508,23 @@ class MachineProvisioner(
     @Async
     @Transactional
     fun stopCt(machineId: Long) =
-        runTask(machineId, MachineStatus.STOPPED) { machine, cluster, node ->
+        runTask(machineId, MachineEventAction.STOP, MachineStatus.STOPPED) { machine, cluster, node
+            ->
             machine.vmid?.let {
-                val upid =
-                    when (kindOf(machine)) {
-                        MachineKind.PROXMOX_LXC -> proxmoxClient.stopLxc(cluster, node, it)
-                        MachineKind.PROXMOX_VM -> proxmoxClient.stopVm(cluster, node, it)
-                    }
-                proxmoxClient.waitForTask(cluster, upid, timeout())
+                when (kindOf(machine)) {
+                    MachineKind.PROXMOX_LXC ->
+                        "pct stop CT$it on $node" to proxmoxClient.stopLxc(cluster, node, it)
+                    MachineKind.PROXMOX_VM ->
+                        "qm stop VM$it on $node" to proxmoxClient.stopVm(cluster, node, it)
+                }
             }
         }
 
-    /** Async destroy (pct/qm per kind): DELETING -> torn down, IP released, and the row removed. */
+    /**
+     * Async destroy (pct/qm per kind): DELETING -> torn down, IP released, and the row soft-deleted
+     * (status DELETED + deletedAt, hidden from every machine read). The row stays so the machine's
+     * event log keeps its owner and remains readable after the machine is gone.
+     */
     @Async
     @Transactional
     fun destroyCt(machineId: Long) {
@@ -407,14 +537,32 @@ class MachineProvisioner(
                 when (placement.effectiveKind) {
                     // pct destroy --purge --force tears down a running CT in one shot.
                     MachineKind.PROXMOX_LXC ->
-                        proxmoxClient.waitForTask(
+                        awaitTask(
+                            machine,
+                            DELETE,
+                            "pct destroy CT$vmid on $node",
                             cluster,
                             proxmoxClient.destroyLxc(cluster, node, vmid),
-                            timeout(),
                         )
-                    // qm destroy refuses a running VM, so stop it first.
-                    MachineKind.PROXMOX_VM ->
-                        proxmoxClient.destroyVmGracefully(cluster, node, vmid, timeout())
+                    // qm destroy REFUSES a running VM ("VM N is running - destroy failed"), unlike
+                    // pct destroy, so a running VM is qm-stopped first. Two tasks, each recorded.
+                    MachineKind.PROXMOX_VM -> {
+                        if (proxmoxClient.vmStatus(cluster, node, vmid) != "stopped")
+                            awaitTask(
+                                machine,
+                                DELETE,
+                                "qm stop VM$vmid on $node",
+                                cluster,
+                                proxmoxClient.stopVm(cluster, node, vmid),
+                            )
+                        awaitTask(
+                            machine,
+                            DELETE,
+                            "qm destroy VM$vmid on $node",
+                            cluster,
+                            proxmoxClient.destroyVm(cluster, node, vmid),
+                        )
+                    }
                 }
             }
             // AI teardown, independent of the machine's current aiMode (a switched machine still
@@ -423,9 +571,17 @@ class MachineProvisioner(
             runCatching { aiRegistry.forMode(AiMode.NEWAPI).teardown(machine) }
             machine.ccproxyMachineId?.let { id -> runCatching { ccproxyClient.deleteMachine(id) } }
             networkService.releaseIpsFor(machine.id!!)
-            machineRepository.delete(machine) // soft delete
+            machine.status = MachineStatus.DELETED
+            machine.deletedAt = LocalDateTime.now()
+            machineRepository.save(machine)
+            events.record(
+                machine,
+                DELETE,
+                DONE,
+                "machine deleted: guest destroyed, AI registrations released, ${machine.ip} freed",
+            )
         } catch (e: Exception) {
-            log.error("destroying machine {} failed: {}", machineId, e.message, e)
+            events.record(machine, DELETE, FAILED, "delete failed: ${e.message}", ERROR, cause = e)
             machine.status = MachineStatus.ERROR
             machineRepository.save(machine)
         }
@@ -433,20 +589,35 @@ class MachineProvisioner(
 
     private fun timeout() = config.provisioning.taskTimeoutSeconds
 
-    /** Run a pct action on the machine's CT, then land the given terminal status (or ERROR). */
+    /**
+     * Run one Proxmox task on the machine's guest — [submit] returns what it submitted and the
+     * UPID, or null when there is no guest yet — then land the given terminal status (or ERROR),
+     * recording the task and the outcome under [action].
+     */
     private fun runTask(
         machineId: Long,
+        action: MachineEventAction,
         terminal: MachineStatus,
-        action: (Machine, ProxmoxCluster, String) -> Unit,
+        submit: (Machine, ProxmoxCluster, String) -> Pair<String, String>?,
     ) {
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
         try {
             val cluster = clusterOf(machine)
             val node = placementService.getPlacement(machine.placementId!!).node!!
-            action(machine, cluster, node)
+            submit(machine, cluster, node)?.let { (what, upid) ->
+                awaitTask(machine, action, what, cluster, upid)
+            }
             machine.status = terminal
+            events.record(machine, action, DONE, "machine is ${terminal.name.lowercase()}")
         } catch (e: Exception) {
-            log.error("task on machine {} failed: {}", machineId, e.message, e)
+            events.record(
+                machine,
+                action,
+                FAILED,
+                "${action.name.lowercase()} failed: ${e.message}",
+                ERROR,
+                cause = e,
+            )
             machine.status = MachineStatus.ERROR
         }
         machineRepository.save(machine)
@@ -456,17 +627,24 @@ class MachineProvisioner(
     private fun runInit(machine: Machine, gateway: String, aiInitSuffix: String) {
         val command = config.provisioning.initCommand?.takeIf { it.isNotBlank() } ?: return
         if (operatorSsh.privateKeyPath() == null) return
-        // `pct start` returning does NOT mean the guest is reachable — it's still booting (sshd not
-        // up, network not ready). Wait until TCP :22 accepts a connection before SSHing in.
-        operatorSsh.waitForSsh(machine.ip!!, config.provisioning.sshReadyTimeoutSeconds)
+        awaitSsh(machine)
         val remote =
             command
                 .replace("{user}", machine.loginUser ?: "")
                 .replace("{sshPubkey}", machine.sshPubkey ?: "")
                 .replace("{ip}", machine.ip ?: "")
                 .replace("{gateway}", gateway) + aiInitSuffix
-        operatorSsh.run("root", machine.ip!!, remote, config.provisioning.taskTimeoutSeconds)
-        log.info("init-machine for machine {} succeeded", machine.id)
+        val started = System.nanoTime()
+        val output =
+            operatorSsh.run("root", machine.ip!!, remote, config.provisioning.taskTimeoutSeconds)
+        val ms = (System.nanoTime() - started) / 1_000_000
+        events.record(
+            machine,
+            PROVISION,
+            INIT_DONE,
+            "init-machine finished in $ms ms",
+            detail = output.ifBlank { null },
+        )
     }
 
     private fun randomPassword(): String {

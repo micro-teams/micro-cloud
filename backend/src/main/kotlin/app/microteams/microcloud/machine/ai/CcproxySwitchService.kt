@@ -19,6 +19,16 @@ package app.microteams.microcloud.machine.ai
 
 import app.microteams.microcloud.common.config.MicroCloudConfig
 import app.microteams.microcloud.machine.instance.Machine
+import app.microteams.microcloud.machine.instance.MachineEventAction.AI_LOGIN
+import app.microteams.microcloud.machine.instance.MachineEventAction.AI_SWITCH
+import app.microteams.microcloud.machine.instance.MachineEventLevel.ERROR
+import app.microteams.microcloud.machine.instance.MachineEventLevel.WARN
+import app.microteams.microcloud.machine.instance.MachineEventPhase.DONE
+import app.microteams.microcloud.machine.instance.MachineEventPhase.FAILED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.LOGIN_CANCELLED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.LOGIN_STARTED
+import app.microteams.microcloud.machine.instance.MachineEventPhase.STARTED
+import app.microteams.microcloud.machine.instance.MachineEventRecorder
 import app.microteams.microcloud.machine.instance.MachineRepository
 import org.rucca.cheese.common.error.BadRequestError
 import org.rucca.cheese.common.error.NotFoundError
@@ -36,6 +46,7 @@ class CcproxySwitchService(
     private val settingsSsh: MachineSettingsSsh,
     private val loginPoller: CcproxyLoginPoller,
     private val config: MicroCloudConfig,
+    private val events: MachineEventRecorder,
 ) {
     private val log = LoggerFactory.getLogger(CcproxySwitchService::class.java)
 
@@ -51,19 +62,37 @@ class CcproxySwitchService(
     @Transactional
     fun switchToCcproxy(id: IdType): Machine {
         val machine = get(id)
-        if (!ccproxyClient.isConfigured()) throw BadRequestError("ccproxy is not configured")
-        if (machine.ip.isNullOrBlank() || machine.loginUser.isNullOrBlank())
-            throw BadRequestError("machine ${machine.id} has no reachable login target yet")
+        events.record(machine, AI_SWITCH, STARTED, "switch to ccproxy requested")
+        try {
+            if (!ccproxyClient.isConfigured()) throw BadRequestError("ccproxy is not configured")
+            if (machine.ip.isNullOrBlank() || machine.loginUser.isNullOrBlank())
+                throw BadRequestError("machine ${machine.id} has no reachable login target yet")
 
-        // Register on ccproxy if not already (this also (re)merges the engine proxy into
-        // settings.json); wait until it is provisioned enough to log in.
-        if (machine.ccproxyMachineId == null) {
-            val m =
-                ccproxyClient.createMachine(machine.ip!!, machine.loginUser!!, 22, machine.hostname)
-            machine.ccproxyMachineId = m.id
-            machineRepository.save(machine)
+            // Register on ccproxy if not already (this also (re)merges the engine proxy into
+            // settings.json); wait until it is provisioned enough to log in.
+            if (machine.ccproxyMachineId == null) {
+                val m =
+                    ccproxyClient.createMachine(
+                        machine.ip!!,
+                        machine.loginUser!!,
+                        22,
+                        machine.hostname,
+                    )
+                machine.ccproxyMachineId = m.id
+                machineRepository.save(machine)
+            }
+            beginLogin(machine)
+        } catch (e: Exception) {
+            events.record(
+                machine,
+                AI_SWITCH,
+                FAILED,
+                "switch to ccproxy failed: ${e.message}",
+                ERROR,
+                cause = e,
+            )
+            throw e
         }
-        beginLogin(machine)
         return machine
     }
 
@@ -78,13 +107,23 @@ class CcproxySwitchService(
                 ?: throw BadRequestError("machine ${machine.id} is not registered with ccproxy")
         // A previous login the operator never completed leaves the machine stuck in `loggingIn`;
         // cancel it so this (re)switch can start a fresh login instead of 409-ing.
-        cancelActiveLogin(ccId)
+        cancelActiveLogin(machine, ccId)
         awaitCcproxyStatus(ccId, setOf("awaitingLogin", "ready"))
 
-        ccproxyClient.startLogin(ccId) // 409 if a login is already in progress → surfaced as 400
+        // 409 if a login is already in progress → surfaced as 400
+        val login = ccproxyClient.startLogin(ccId)
         machine.aiMode = AiMode.CCPROXY
         machine.aiStatus = AiStatus.PROVISIONING
         machineRepository.save(machine)
+        events.record(
+            machine,
+            AI_LOGIN,
+            LOGIN_STARTED,
+            "ccproxy login started as request ${login.id}; a login-operator completes the OAuth",
+            detail =
+                "ccproxyMachineId=$ccId\nloginRequestId=${login.id}\nstatus=${login.status}\n" +
+                    "accountEmail=${login.accountEmail}",
+        )
 
         loginPoller.pollLoginToReady(machine.id!!, ccId)
     }
@@ -97,33 +136,55 @@ class CcproxySwitchService(
     @Transactional
     fun switchToNewapi(id: IdType): Machine {
         val machine = get(id)
-        val base =
-            config.newapi.machineBaseUrl?.takeIf { it.isNotBlank() }
-                ?: throw BadRequestError("newapi machine-base-url is not configured")
-        if (!newapiClient.isConfigured()) throw BadRequestError("newapi is not configured")
+        events.record(machine, AI_SWITCH, STARTED, "switch to newapi requested")
+        try {
+            val base =
+                config.newapi.machineBaseUrl?.takeIf { it.isNotBlank() }
+                    ?: throw BadRequestError("newapi machine-base-url is not configured")
+            if (!newapiClient.isConfigured()) throw BadRequestError("newapi is not configured")
 
-        // Reuse this machine's newapi token if it still has one, else mint a fresh one.
-        val tokenId =
-            machine.newapiTokenId
-                ?: newapiClient.ensureToken("mc-machine-${machine.id}", config.newapi.defaultQuota)
-        machine.newapiTokenId = tokenId
-        val key = newapiClient.revealKey(tokenId)
-        settingsSsh.restoreNewapiEnv(machine, base, key, config.provisioning.taskTimeoutSeconds)
+            // Reuse this machine's newapi token if it still has one, else mint a fresh one.
+            val tokenId =
+                machine.newapiTokenId
+                    ?: newapiClient.ensureToken(
+                        "mc-machine-${machine.id}",
+                        config.newapi.defaultQuota,
+                    )
+            machine.newapiTokenId = tokenId
+            val key = newapiClient.revealKey(tokenId)
+            settingsSsh.restoreNewapiEnv(machine, base, key, config.provisioning.taskTimeoutSeconds)
 
-        // Free the ccproxy account (removes the engine session too); the proxy line remains in
-        // settings.json as an unregistered passthrough. A future switch re-registers. Cancel any
-        // in-flight login first so a half-done login doesn't linger.
-        machine.ccproxyMachineId?.let { ccId ->
-            runCatching { cancelActiveLogin(ccId) }
-            runCatching { ccproxyClient.deleteMachine(ccId) }
-                .onFailure {
-                    log.warn("ccproxy delete for machine {} failed: {}", machine.id, it.message)
-                }
+            // Free the ccproxy account (removes the engine session too); the proxy line remains in
+            // settings.json as an unregistered passthrough. A future switch re-registers. Cancel
+            // any in-flight login first so a half-done login doesn't linger.
+            machine.ccproxyMachineId?.let { ccId ->
+                runCatching { cancelActiveLogin(machine, ccId) }
+                runCatching { ccproxyClient.deleteMachine(ccId) }
+                    .onFailure {
+                        log.warn("ccproxy delete for machine {} failed: {}", machine.id, it.message)
+                    }
+            }
+            machine.ccproxyMachineId = null
+            machine.aiMode = AiMode.NEWAPI
+            machine.aiStatus = AiStatus.READY
+            machineRepository.save(machine)
+            events.record(
+                machine,
+                AI_SWITCH,
+                DONE,
+                "switched back to newapi (token $tokenId); the ccproxy registration is released",
+            )
+        } catch (e: Exception) {
+            events.record(
+                machine,
+                AI_SWITCH,
+                FAILED,
+                "switch to newapi failed: ${e.message}",
+                ERROR,
+                cause = e,
+            )
+            throw e
         }
-        machine.ccproxyMachineId = null
-        machine.aiMode = AiMode.NEWAPI
-        machine.aiStatus = AiStatus.READY
-        machineRepository.save(machine)
         return machine
     }
 
@@ -140,19 +201,42 @@ class CcproxySwitchService(
         try {
             beginLogin(machine)
         } catch (e: Exception) {
-            log.error("ccproxy login for machine {} could not start: {}", machineId, e.message, e)
+            events.record(
+                machine,
+                AI_LOGIN,
+                FAILED,
+                "ccproxy login could not start: ${e.message}",
+                ERROR,
+                cause = e,
+            )
             machine.aiStatus = AiStatus.ERROR
             machineRepository.save(machine)
         }
     }
 
     /** Cancel the machine's current login-request if one is in progress (best-effort). */
-    private fun cancelActiveLogin(ccId: Long) {
+    private fun cancelActiveLogin(machine: Machine, ccId: Long) {
         val m = runCatching { ccproxyClient.getMachine(ccId) }.getOrNull() ?: return
         m.currentLoginRequestId?.let { lrId ->
             runCatching { ccproxyClient.cancelLogin(lrId) }
+                .onSuccess {
+                    events.record(
+                        machine,
+                        AI_LOGIN,
+                        LOGIN_CANCELLED,
+                        "cancelled the previous ccproxy login request $lrId, never completed",
+                        detail = "ccproxyMachineId=$ccId\nloginRequestId=$lrId\nstatus=${m.status}",
+                    )
+                }
                 .onFailure {
-                    log.warn("cancel login {} on ccproxy {} failed: {}", lrId, ccId, it.message)
+                    events.record(
+                        machine,
+                        AI_LOGIN,
+                        LOGIN_CANCELLED,
+                        "cancelling the previous ccproxy login request $lrId failed: ${it.message}",
+                        WARN,
+                        cause = it,
+                    )
                 }
         }
     }

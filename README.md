@@ -134,6 +134,13 @@ Reading it:
 - **If ccproxy is not wired**, the engine simply isn't there: machines run NEWAPI with Claude talking
   to newapi directly, and the `/ai/ccproxy` switch is unavailable.
 
+Every machine also has an event log, `GET /machine/{id}/events`: an append-only record of each step
+of every action taken on it. Provisioning records each Proxmox task with its UPID and duration, the
+SSH wait and the init script's output; start, shutdown, stop and deletion record their Proxmox
+tasks; an AI switch and a ccproxy login record what the poller saw each time ccproxy's status
+changed; every failure is recorded with its exception. `status` and `aiStatus` say where a machine
+ended up, the log says how. It outlives the machine, so a deleted machine can still be explained.
+
 ## What is here
 
 | | |

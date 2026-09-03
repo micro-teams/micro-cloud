@@ -751,6 +751,32 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /machine/{id}/events:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    get:
+      tags: [machine]
+      operationId: listMachineEvents
+      summary: "The machine's event log: what happened to it, when, with the evidence"
+      description: >-
+        An append-only, timestamped record of every lifecycle action taken on the machine
+        (provisioning, start/shutdown/stop, deletion, AI switch and ccproxy login), one event per
+        step: each Proxmox task with its UPID and duration, the SSH wait, the init script's output
+        tail, ccproxy's login status as it changes, and every failure with the exception. Ordered by
+        `at` ascending. Events outlive the machine: they stay readable after it is deleted. `since`
+        returns only events at or after that instant (pass the `at` of the last event seen to poll
+        for new ones). A tenant reads its own machines; super-admin any.
+      security: [{ tenantSecret: [] }, { superAdmin: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageStart"
+        - $ref: "#/components/parameters/PageSize"
+        - name: since
+          in: query
+          description: only events at or after this instant
+          schema: { type: string, format: date-time }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ListMachineEventsResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     tenantSecret:
@@ -1370,5 +1396,51 @@ components:
       type: object
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Machine" } }
+        page: { $ref: "#/components/schemas/Page" }
+      required: [items, page]
+    MachineEventAction:
+      type: string
+      description: >-
+        The lifecycle action an event belongs to. PROVISION: create on Proxmox through to running.
+        START / SHUTDOWN / STOP: the matching Proxmox task. DELETE: teardown (Proxmox, AI, IP).
+        AI_SWITCH: a switch of the machine's Claude Code between newapi and ccproxy. AI_LOGIN: a
+        ccproxy subscription login, from start to ready.
+      enum: [PROVISION, START, SHUTDOWN, STOP, DELETE, AI_SWITCH, AI_LOGIN]
+    MachineEventPhase:
+      type: string
+      description: >-
+        The step within the action. STARTED: the action began (detail: where and with what).
+        PVE_TASK_SUBMITTED: a Proxmox task was submitted (detail: its UPID). PVE_TASK_DONE: that task
+        finished OK (detail: UPID + duration). SSH_REACHABLE: the guest accepts TCP :22 (detail:
+        how long that took). INIT_DONE: init-machine finished (detail: its output tail).
+        CCPROXY_REGISTERED: the birth registration with ccproxy, INFO when it succeeded and WARN when
+        it failed (the machine keeps running). AI_SETUP_FAILED: the AI channel could not be set up,
+        aiStatus is error, the machine is unaffected. RUNNING: the machine reached running (the end
+        of PROVISION). LOGIN_STARTED: ccproxy started the login (detail: its login request id and
+        the account). LOGIN_POLLED: ccproxy's reported status changed (detail: the raw status).
+        LOGIN_READY: the login completed and the machine holds a credential. LOGIN_CANCELLED: a
+        previous, never-completed login was cancelled so a fresh one could start. DONE: the action
+        completed (START / SHUTDOWN / STOP / DELETE / AI_SWITCH). FAILED: the action failed
+        (detail: the exception).
+      enum: [STARTED, PVE_TASK_SUBMITTED, PVE_TASK_DONE, SSH_REACHABLE, INIT_DONE, CCPROXY_REGISTERED, AI_SETUP_FAILED, RUNNING, LOGIN_STARTED, LOGIN_POLLED, LOGIN_READY, LOGIN_CANCELLED, DONE, FAILED]
+    MachineEventLevel:
+      type: string
+      enum: [INFO, WARN, ERROR]
+    MachineEvent:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        machineId: { type: integer, format: int64 }
+        at: { type: string, format: date-time, description: when the event was recorded }
+        action: { $ref: "#/components/schemas/MachineEventAction" }
+        phase: { $ref: "#/components/schemas/MachineEventPhase" }
+        level: { $ref: "#/components/schemas/MachineEventLevel" }
+        message: { type: string, description: "one sentence, at most 512 characters" }
+        detail: { type: string, nullable: true, description: "the evidence: a UPID, a duration, an output tail, ccproxy's raw status, an exception" }
+      required: [id, machineId, at, action, phase, level, message]
+    ListMachineEventsResponse:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MachineEvent" } }
         page: { $ref: "#/components/schemas/Page" }
       required: [items, page]

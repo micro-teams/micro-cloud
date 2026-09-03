@@ -12,6 +12,7 @@ import app.microteams.microcloud.model.CreatePlacementRequestDTO
 import app.microteams.microcloud.model.CreateProxmoxClusterRequestDTO
 import app.microteams.microcloud.model.CreateZoneRequestDTO
 import app.microteams.microcloud.model.ErrorDTO
+import app.microteams.microcloud.model.ListMachineEventsResponseDTO
 import app.microteams.microcloud.model.ListMachineTemplatesResponseDTO
 import app.microteams.microcloud.model.ListMachineTypesResponseDTO
 import app.microteams.microcloud.model.ListMachinesResponseDTO
@@ -743,6 +744,60 @@ interface MachineApi {
     fun getZone(
         @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
     ): ResponseEntity<ZoneDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
+        summary = "The machine's event log: what happened to it, when, with the evidence",
+        operationId = "listMachineEvents",
+        description =
+            """An append-only, timestamped record of every lifecycle action taken on the machine (provisioning, start/shutdown/stop, deletion, AI switch and ccproxy login), one event per step: each Proxmox task with its UPID and duration, the SSH wait, the init script's output tail, ccproxy's login status as it changes, and every failure with the exception. Ordered by `at` ascending. Events outlive the machine: they stay readable after it is deleted. `since` returns only events at or after that instant (pass the `at` of the last event seen to poll for new ones). A tenant reads its own machines; super-admin any.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "200",
+                    description = "OK",
+                    content =
+                        [
+                            Content(
+                                schema =
+                                    Schema(implementation = ListMachineEventsResponseDTO::class)
+                            )
+                        ],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security =
+            [SecurityRequirement(name = "tenantSecret"), SecurityRequirement(name = "superAdmin")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.GET],
+        value = ["/machine/{id}/events"],
+        produces = ["application/json"],
+    )
+    fun listMachineEvents(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long,
+        @Parameter(description = "cursor — id of the first item to return")
+        @Valid
+        @RequestParam(value = "page_start", required = false)
+        pageStart: kotlin.Long?,
+        @Parameter(description = "", schema = Schema(defaultValue = "20"))
+        @Valid
+        @RequestParam(value = "page_size", required = false, defaultValue = "20")
+        pageSize: kotlin.Int,
+        @Parameter(description = "only events at or after this instant")
+        @Valid
+        @RequestParam(value = "since", required = false)
+        @org.springframework.format.annotation.DateTimeFormat(
+            iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME
+        )
+        since: java.time.OffsetDateTime?,
+    ): ResponseEntity<ListMachineEventsResponseDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
     }
 

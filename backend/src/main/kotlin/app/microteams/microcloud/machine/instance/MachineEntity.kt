@@ -18,6 +18,8 @@ import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
 import org.rucca.cheese.common.persistent.IdType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 
 enum class MachineStatus {
     PROVISIONING,
@@ -101,4 +103,12 @@ interface MachineRepository : JpaRepository<Machine, IdType> {
     fun findByTenantId(tenantId: IdType): List<Machine>
 
     fun findByTenantIdAndCustomerId(tenantId: IdType, customerId: IdType): List<Machine>
+
+    /**
+     * The owning tenant of a machine whether or not it has been soft-deleted — native SQL because
+     * the entity's @SQLRestriction hides deleted rows from every JPA/HQL path. A deleted machine
+     * still has an owner: its event log stays readable, by that tenant only.
+     */
+    @Query(value = "select tenant_id from {h-schema}machine where id = :id", nativeQuery = true)
+    fun findTenantIdIncludingDeleted(@Param("id") id: IdType): IdType?
 }
