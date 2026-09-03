@@ -195,15 +195,28 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         send(cluster, "PUT", "/nodes/$node/qemu/$vmid/config", params)
     }
 
-    /** Grow a VM disk, e.g. disk=`scsi0`, size=`20G`. Sync. */
-    fun resizeVmDisk(cluster: ProxmoxCluster, node: String, vmid: Int, disk: String, size: String) {
+    /**
+     * Grow a VM disk, e.g. disk=`scsi0`, size=`20G`. Returns the task UPID: the resize is a Proxmox
+     * TASK that holds the VM's config lock until the volume has grown, and `qm start` gives up on
+     * that lock after 10 s. On a busy thin pool the resize alone took 12 s (pve119, 2026-09-03, VM
+     * 147: "can't lock file '/var/lock/qemu-server/lock-147.conf' - got timeout"), so a start
+     * issued without waiting for this task fails exactly when the storage is slow. Await it with
+     * [waitForTask] before touching the VM again.
+     */
+    fun resizeVmDisk(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        disk: String,
+        size: String,
+    ): String =
         send(
-            cluster,
-            "PUT",
-            "/nodes/$node/qemu/$vmid/resize",
-            mapOf("disk" to disk, "size" to size),
-        )
-    }
+                cluster,
+                "PUT",
+                "/nodes/$node/qemu/$vmid/resize",
+                mapOf("disk" to disk, "size" to size),
+            )
+            .asText()
 
     /** Convert a stopped VM into a template. Returns the task UPID. */
     fun templateVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
