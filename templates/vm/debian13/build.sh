@@ -53,6 +53,24 @@ curl -fsSL "https://github.com/jj-vcs/jj/releases/download/${JJ_VER}/jj-${JJ_VER
 install -m755 "$(find "$JJ_TMP" -name jj -type f | head -1)" /usr/local/bin/jj
 rm -rf "$JJ_TMP"
 
+# --- Claude Code, baked ---
+# The binary only, fetched from the vendor's release layout and verified against the sha256 in
+# its manifest; init-machine.py copies it into each login user's own install layout at first
+# boot. The download it replaces cost every machine 49 s of boot and a route to claude.ai.
+# KEEP IN SYNC WITH bake_claude() in templates/lxc/debian13/build.py.
+CLAUDE_RELEASES=https://downloads.claude.ai/claude-code-releases
+CLAUDE_PLATFORM=linux-x64
+CLAUDE_VERSION="${CLAUDE_VERSION:-$(curl -fsSL "$CLAUDE_RELEASES/latest")}"
+CLAUDE_SUM="$(curl -fsSL "$CLAUDE_RELEASES/$CLAUDE_VERSION/manifest.json" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['platforms']['$CLAUDE_PLATFORM']['checksum'])")"
+install -d -m755 "/opt/claude/versions/$CLAUDE_VERSION"
+curl -fsSL "$CLAUDE_RELEASES/$CLAUDE_VERSION/$CLAUDE_PLATFORM/claude" \
+    -o "/opt/claude/versions/$CLAUDE_VERSION/claude"
+echo "$CLAUDE_SUM  /opt/claude/versions/$CLAUDE_VERSION/claude" | sha256sum -c - >/dev/null
+chmod 755 "/opt/claude/versions/$CLAUDE_VERSION/claude"
+echo "$CLAUDE_VERSION" > /opt/claude/VERSION
+echo "[build] baked Claude Code $CLAUDE_VERSION"
+
 # --- Put every cloud-init-created login user in the docker group ---
 # The Debian cloud image declares `system_info.default_user.groups` in a /etc/cloud/cloud.cfg.d
 # drop-in that OVERRIDES the main /etc/cloud/cloud.cfg, so appending `docker` to the main file has no
