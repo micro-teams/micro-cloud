@@ -4,9 +4,11 @@
 An LXC template is a compressed rootfs tarball. Rather than assemble one from scratch, this routine
 DOWNLOADS the standard Debian 13 LXC template Proxmox ships (~124 MB `.tar.zst` from
 download.proxmox.com), customizes it in a chroot (installs base packages + Docker, bakes in
-init-machine.py, enables root SSH for first-boot init), and repackages it into our template tarball.
-Claude Code is
-NOT baked in — init-machine.py installs it per-user at first boot to keep the template small.
+init-machine.py, enables root SSH for first-boot init), bakes the Claude Code binary under
+/opt/claude, and repackages it into our template tarball. init-machine.py copies that binary into
+the login user's own install layout at first boot, so a machine never downloads it: the download
+(~260 MB from claude.ai) used to cost every machine 49 s of its boot and required a route to
+claude.ai, which a private-subnet machine may not have.
 
 It is the COMPILE step for the template: the output is what ships in the bundle; this script does
 not. stdlib-only (no pip packages); it shells out to `tar`, `chroot`, `mount`, `apt` — not Python
@@ -17,6 +19,8 @@ Example:
 """
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -32,6 +36,18 @@ INIT_SCRIPT = os.path.join(HERE, "init-machine.py")
 DEFAULT_BASE_URL = (
     "http://download.proxmox.com/images/system/debian-13-standard_13.6-1_amd64.tar.zst"
 )
+
+# Claude Code's release layout, the same one claude.ai/install.sh reads:
+#   <base>/latest                       a bare version string
+#   <base>/<version>/manifest.json      platforms.<platform>.checksum (sha256 of the binary)
+#   <base>/<version>/<platform>/claude  the native binary
+# The template is amd64 glibc (see DEFAULT_BASE_URL), hence linux-x64.
+CLAUDE_RELEASES = "https://downloads.claude.ai/claude-code-releases"
+CLAUDE_PLATFORM = "linux-x64"
+# Where the binary lives in the image. init-machine.py copies it from here into each login
+# user's ~/.local/share/claude/versions/<version> and links ~/.local/bin/claude to it — the
+# layout the official installer creates, so `claude update` and version pins keep working.
+CLAUDE_BAKE_DIR = "opt/claude"
 
 
 def log(msg: str) -> None:
@@ -50,6 +66,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="standard Debian 13 LXC template: an http(s) URL or a local .tar.zst path")
     p.add_argument("--workdir", default=None,
                    help="scratch directory (default: a fresh temp dir, removed afterwards)")
+    p.add_argument("--claude-version", default="latest",
+                   help="Claude Code version to bake (default: whatever <releases>/latest says "
+                        "at build time; the exact version is recorded in /opt/claude/VERSION)")
     return p.parse_args(argv)
 
 
@@ -81,7 +100,7 @@ def extract_rootfs(tarball: str, rootfs: str) -> None:
 
 
 def customize(rootfs: str, packages: list[str]) -> None:
-    """Install packages + Claude Code and bake in init-machine.py, inside a chroot."""
+    """Install packages and bake in init-machine.py, inside a chroot."""
     shutil.copy("/etc/resolv.conf", os.path.join(rootfs, "etc/resolv.conf"))
     mounts = ["proc", "sys", "dev"]
     for m in mounts:
@@ -118,10 +137,9 @@ curl -fsSL "https://github.com/jj-vcs/jj/releases/download/${{JJ_VER}}/jj-${{JJ_
 install -m755 "$(find "$JJ_TMP" -name jj -type f | head -1)" /usr/local/bin/jj
 rm -rf "$JJ_TMP"
 
-# Claude Code is NOT baked into the template — it is installed per-user at first boot by
-# init-machine.py (via claude.ai/install.sh). That keeps the template small, always installs the
-# latest, and runs the installer on a real running system rather than in this chroot (where its
-# self-install step hangs).
+# Claude Code is baked by bake_claude() below, from outside the chroot: only the binary is
+# fetched (the official installer's self-install step hangs in a chroot, and nothing it does
+# beyond placing the binary is needed).
 # Root may SSH into a freshly created machine only until init-machine.py hardens it away.
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 systemctl enable ssh || true
@@ -132,6 +150,42 @@ rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
     finally:
         for m in reversed(mounts):
             subprocess.run(["umount", "-lf", os.path.join(rootfs, m)], check=False)
+
+
+def _fetch(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        return resp.read()
+
+
+def bake_claude(rootfs: str, version: str) -> str:
+    """Put the Claude Code binary into the image at /opt/claude/versions/<version>/claude.
+
+    Verified against the sha256 the vendor publishes in the version's manifest, so a template
+    never ships a truncated or tampered binary. `latest` is resolved here, at build time, and the
+    version actually baked is written to /opt/claude/VERSION for init-machine.py and for anyone
+    asking what a template contains. Returns the resolved version.
+    """
+    if version == "latest":
+        version = _fetch(f"{CLAUDE_RELEASES}/latest").decode().strip()
+    manifest = json.loads(_fetch(f"{CLAUDE_RELEASES}/{version}/manifest.json"))
+    expected = manifest["platforms"][CLAUDE_PLATFORM]["checksum"]
+    dest_dir = os.path.join(rootfs, CLAUDE_BAKE_DIR, "versions", version)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, "claude")
+    log(f"baking Claude Code {version} ({CLAUDE_PLATFORM}) -> /{CLAUDE_BAKE_DIR}/versions/{version}/claude")
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(f"{CLAUDE_RELEASES}/{version}/{CLAUDE_PLATFORM}/claude",
+                                timeout=60) as resp, open(dest, "wb") as out:
+        for chunk in iter(lambda: resp.read(1 << 20), b""):
+            digest.update(chunk)
+            out.write(chunk)
+    if digest.hexdigest() != expected:
+        raise SystemExit(f"Claude Code {version} checksum mismatch: got {digest.hexdigest()}, "
+                         f"manifest says {expected}")
+    os.chmod(dest, 0o755)
+    with open(os.path.join(rootfs, CLAUDE_BAKE_DIR, "VERSION"), "w") as f:
+        f.write(version + "\n")
+    return version
 
 
 def repackage(rootfs: str, output: str) -> None:
@@ -158,6 +212,7 @@ def main(argv: list[str]) -> int:
         base = fetch_base(args.base_url, os.path.join(workdir, "base.tar.zst"))
         extract_rootfs(base, rootfs)
         customize(rootfs, read_packages())
+        bake_claude(rootfs, args.claude_version)
         repackage(rootfs, args.output)
     finally:
         if owns_workdir:

@@ -182,14 +182,34 @@ def write_ai_config(name: str, base_url: str, token: str) -> None:
     os.chown(claude_json, uid, gid)
 
 
-def install_claude(name: str) -> None:
-    """Install Claude Code for the user via the official installer.
+# The template's copy of Claude Code (the build step bakes it here; see the template's build
+# script). VERSION names the one version under versions/.
+BAKED_CLAUDE = "/opt/claude"
 
-    Not baked into the template (keeps it small); installed here at first boot, on a real running
-    system (the installer's self-install hangs in a chroot but works here). It drops a native binary
-    into the user's ~/.local/bin, which the stock Debian ~/.profile puts on PATH. Run as the user.
+
+def install_claude(name: str) -> None:
+    """Give the login user a `claude`, in the layout the official installer creates.
+
+    From the template's baked copy when there is one: the binary goes to
+    ~/.local/share/claude/versions/<version> and ~/.local/bin/claude links to it (the stock Debian
+    ~/.profile puts that on PATH), which is exactly what claude.ai/install.sh would have produced,
+    so `claude update` and pinned versions keep working. Copying takes a second; the download it
+    replaces took 49 s per machine and needed a route to claude.ai. A template built before the
+    binary was baked still gets the installer, so an old image keeps working. Run as the user.
     """
-    log(f"installing Claude Code for {name} (downloads a ~260 MB binary)")
+    version_file = os.path.join(BAKED_CLAUDE, "VERSION")
+    if os.path.isfile(version_file):
+        with open(version_file) as f:
+            version = f.read().strip()
+        src = os.path.join(BAKED_CLAUDE, "versions", version, "claude")
+        log(f"installing Claude Code {version} for {name} from the template's copy")
+        run(["sudo", "-u", name, "-H", "bash", "-lc",
+             'set -e; v="$HOME/.local/share/claude/versions"; '
+             'mkdir -p "$v" "$HOME/.local/bin"; '
+             f'cp "{src}" "$v/{version}"; chmod 755 "$v/{version}"; '
+             f'ln -sfn "$v/{version}" "$HOME/.local/bin/claude"'])
+        return
+    log(f"installing Claude Code for {name} (no copy in this template: downloads a ~260 MB binary)")
     run(["sudo", "-u", name, "-H", "bash", "-lc",
          "curl -fsSL https://claude.ai/install.sh | bash"])
 
