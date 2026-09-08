@@ -107,7 +107,16 @@ interface MachineRepository : JpaRepository<Machine, IdType> {
     @Query(value = "select 1 from pg_advisory_xact_lock(:tenantId)", nativeQuery = true)
     fun lockWarmCreation(@Param("tenantId") tenantId: IdType): Int
 
-    fun findByTenantIdAndWarmPoolKey(tenantId: IdType, warmPoolKey: String): Machine?
+    // Deleted machines retain their creation key; retries must not recreate them.
+    @Query(
+        value =
+            "select * from {h-schema}machine where tenant_id = :tenantId and warm_pool_key = :warmPoolKey",
+        nativeQuery = true,
+    )
+    fun findByTenantIdAndWarmPoolKey(
+        @Param("tenantId") tenantId: IdType,
+        @Param("warmPoolKey") warmPoolKey: String,
+    ): Machine?
 
     @org.springframework.data.jpa.repository.Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from Machine m where m.id = :id and m.tenantId = :tenantId")

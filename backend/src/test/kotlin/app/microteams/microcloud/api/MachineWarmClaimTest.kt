@@ -12,16 +12,20 @@ import app.microteams.microcloud.machine.instance.MachineService
 import app.microteams.microcloud.machine.instance.MachineStatus
 import app.microteams.microcloud.machine.offering.OfferingService
 import app.microteams.microcloud.model.ClaimWarmMachineRequestDTO
+import app.microteams.microcloud.model.CreateMachineRequestDTO
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.every
 import io.mockk.mockk
+import java.time.LocalDateTime
 import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.rucca.cheese.common.error.BadRequestError
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 
@@ -93,6 +97,32 @@ constructor(private val service: MachineService, private val machines: MachineRe
         val id = machine()
         assertFails { service.claimWarmMachine(11, id, request(account = 34)) }
         assertEquals(1L, machines.findById(id).get().customerId)
+    }
+
+    @Test
+    fun deletedWarmCreationKeyReturnsAClientErrorWithoutRecreating() {
+        val id = machine()
+        val deleted = machines.findById(id).get()
+        val key = deleted.warmPoolKey!!
+        deleted.deletedAt = LocalDateTime.now()
+        machines.saveAndFlush(deleted)
+        val request =
+            CreateMachineRequestDTO(
+                customerId = 1,
+                accountId = 1,
+                hostname = "unused",
+                offeringId = 1,
+                cores = 1,
+                memoryMb = 512,
+                diskGb = 4,
+                user = "dev",
+                warmPoolKey = key,
+                aiMode = "none",
+            )
+        val error = assertFailsWith<BadRequestError> { service.createMachine(11, request) }
+        assertEquals("warmPoolKey belongs to a deleted machine; use a new key", error.message)
+        assertEquals(id, machines.findByTenantIdAndWarmPoolKey(11, key)?.id)
+        assertEquals(null, machines.findByTenantIdAndWarmPoolKey(12, key))
     }
 
     @Test
