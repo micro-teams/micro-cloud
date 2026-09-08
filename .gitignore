@@ -11,6 +11,8 @@ frontend/dist/
 
 # backend build output
 backend/target/
+.maven-cache/
+logs/
 
 # python bytecode
 __pycache__/

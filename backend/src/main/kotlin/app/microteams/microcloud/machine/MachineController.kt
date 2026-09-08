@@ -320,6 +320,15 @@ class MachineController(
         ResponseEntity.status(HttpStatus.CREATED)
             .body(machineService.createMachine(tenantId(), createMachineRequestDTO))
 
+    @Guard("create-machine", "machine")
+    override fun claimWarmMachine(
+        @PathVariable("id") @ResourceId id: IdType,
+        @RequestBody claimWarmMachineRequestDTO: ClaimWarmMachineRequestDTO,
+    ): ResponseEntity<MachineDTO> =
+        ResponseEntity.ok(
+            machineService.claimWarmMachine(tenantId(), id, claimWarmMachineRequestDTO)
+        )
+
     @Guard("get-machine", "machine")
     override fun getMachine(
         @PathVariable("id") @ResourceId id: IdType

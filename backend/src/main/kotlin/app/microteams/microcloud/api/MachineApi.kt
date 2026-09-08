@@ -4,6 +4,7 @@
  */
 package app.microteams.microcloud.api
 
+import app.microteams.microcloud.model.ClaimWarmMachineRequestDTO
 import app.microteams.microcloud.model.CreateMachineRequestDTO
 import app.microteams.microcloud.model.CreateMachineTypeRequestDTO
 import app.microteams.microcloud.model.CreateNetworkRequestDTO
@@ -53,6 +54,48 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @Validated
 interface MachineApi {
+
+    @Operation(
+        tags = ["machine"],
+        summary = "Assign an unused warm machine to a customer once",
+        operationId = "claimWarmMachine",
+        description =
+            """The tenant prepares the machine using its own operator credentials before claiming it. Claim changes customer and billing ownership within that tenant, without restarting the guest. The machine must be running with AI ready or disabled. Repeating the same claim is safe; a different claim is rejected. Claim does not erase guest data or rotate SSH keys, so only machines created for the warm pool may be claimed. Assigned machines cannot reenter the pool.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "200",
+                    description = "Claimed",
+                    content = [Content(schema = Schema(implementation = MachineDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "tenantSecret")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/claim"],
+        produces = ["application/json"],
+        consumes = ["application/json"],
+    )
+    fun claimWarmMachine(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long,
+        @Parameter(description = "", required = true)
+        @Valid
+        @RequestBody
+        claimWarmMachineRequestDTO: ClaimWarmMachineRequestDTO,
+    ): ResponseEntity<MachineDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
 
     @Operation(
         tags = ["machine"],

@@ -5,6 +5,21 @@
 > it is. The machine-readable contract is [`MicroCloud-API.yml`](MicroCloud-API.yml); the Chinese
 > version of this document is [`业务模型.md`](业务模型.md).
 
+## Warm machines
+
+A tenant can prepare unused capacity under a platform customer and account by passing
+`warmPoolKey` when creating a machine. Repeating the same creation request returns the
+same machine. Reusing the key with different parameters is rejected.
+
+`POST /machine/{id}/claim` assigns a running, AI-ready (or AI-disabled) warm machine
+to a customer and its billing accounts within the same tenant. The claim key identifies
+the recipient. Only the same claim can be retried; an assigned machine cannot return to
+the pool. Until claim, the original account pays for the machine.
+
+Guest preparation, operator keys and isolation before assignment remain the tenant's
+responsibility. Claim does not erase data or rotate credentials. Warm creation initially
+supports `none` and `ccproxy`, without a legacy `apiKeyId`.
+
 ## What MicroCloud is
 
 MicroCloud turns compute infrastructure (today: Proxmox VE) into a simple self-service API: an

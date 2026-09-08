@@ -212,5 +212,20 @@ constructor(
                     .content(body(""","ccproxyAccountId":99999999"""))
             )
             .andExpect(status().isNotFound)
+
+        val warmBody = body(""","aiMode":"none","warmPoolKey":"${java.util.UUID.randomUUID()}"""")
+        val warmFirst = post("/machine", secret, warmBody).response
+        org.junit.jupiter.api.Assertions.assertEquals(201, warmFirst.status)
+        val warmRetry = post("/machine", secret, warmBody).response
+        org.junit.jupiter.api.Assertions.assertEquals(201, warmRetry.status)
+        org.junit.jupiter.api.Assertions.assertEquals(
+            JSONObject(warmFirst.contentAsString).getLong("id"),
+            JSONObject(warmRetry.contentAsString).getLong("id"),
+        )
+        val changed = JSONObject(warmBody).put("cores", 2).toString()
+        org.junit.jupiter.api.Assertions.assertEquals(
+            400,
+            post("/machine", secret, changed).response.status,
+        )
     }
 }

@@ -2,6 +2,7 @@ package app.microteams.microcloud.model
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
+import javax.validation.constraints.Size
 
 /**
  * @param customerId
@@ -14,6 +15,9 @@ import io.swagger.v3.oas.annotations.media.Schema
  * @param user non-root login user to create on the machine
  * @param newapiAccountId account for newapi AI usage; defaults to accountId if omitted
  * @param ccproxyAccountId account for ccproxy AI usage; defaults to accountId if omitted
+ * @param warmPoolKey Creates an unused warm machine. A stable key makes creation retryable within
+ *   this tenant. Reuse only with the same creation request. The platform account pays until claim.
+ *   Supported with aiMode none or ccproxy and without a legacy apiKeyId.
  * @param sshPubkey SSH public key to authorize for the user
  * @param apiKeyId (legacy, optional) a pre-created model key to bind; superseded by aiMode
  * @param aiMode How this machine's Claude Code reaches models, decided at create: newapi (default;
@@ -80,6 +84,14 @@ data class CreateMachineRequestDTO(
     )
     @get:JsonProperty("ccproxyAccountId")
     val ccproxyAccountId: kotlin.Long? = null,
+    @get:Size(min = 1, max = 128)
+    @Schema(
+        example = "null",
+        description =
+            "Creates an unused warm machine. A stable key makes creation retryable within this tenant. Reuse only with the same creation request. The platform account pays until claim. Supported with aiMode none or ccproxy and without a legacy apiKeyId.",
+    )
+    @get:JsonProperty("warmPoolKey")
+    val warmPoolKey: kotlin.String? = null,
     @Schema(example = "null", description = "SSH public key to authorize for the user")
     @get:JsonProperty("sshPubkey")
     val sshPubkey: kotlin.String? = null,
