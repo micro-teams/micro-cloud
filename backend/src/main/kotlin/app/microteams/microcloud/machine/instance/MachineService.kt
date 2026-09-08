@@ -186,6 +186,8 @@ class MachineService(
             // Serialize first creation as well as retries; the unique index is the final guard.
             machineRepository.lockWarmCreation(tenantId)
             machineRepository.findByTenantIdAndWarmPoolKey(tenantId, warmKey)?.let {
+                if (it.deletedAt != null)
+                    throw BadRequestError("warmPoolKey belongs to a deleted machine; use a new key")
                 if (it.warmRequestHash != warmHash)
                     throw BadRequestError("warmPoolKey was used with a different request")
                 return it.toDTO()
