@@ -685,6 +685,24 @@ paths:
         "202": { description: "Accepted — deletion started (status becomes 'deleting'); poll GET until it 404s" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /machine/{id}/claim:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: claimWarmMachine
+      summary: Assign an unused warm machine to a customer once
+      description: >-
+        The tenant prepares the machine using its own operator credentials before claiming it.
+        Claim changes customer and billing ownership within that tenant, without restarting the guest.
+        The machine must be running with AI ready or disabled. Repeating the same claim is safe;
+        a different claim is rejected. Claim does not erase guest data or rotate SSH keys, so only
+        machines created for the warm pool may be claimed. Assigned machines cannot reenter the pool.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ClaimWarmMachineRequest" } } } }
+      responses:
+        "200": { description: Claimed, content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /machine/{id}/start:
     parameters: [ { $ref: "#/components/parameters/IdPath" } ]
     post:
@@ -1368,6 +1386,15 @@ components:
           example: ready
         createdAt: { type: string, format: date-time, nullable: true }
       required: [id, customerId, accountId, newapiAccountId, ccproxyAccountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status, aiMode, aiStatus]
+    ClaimWarmMachineRequest:
+      type: object
+      properties:
+        claimKey: { type: string, minLength: 1, maxLength: 128, description: Stable recipient identity used for retries }
+        customerId: { type: integer, format: int64 }
+        accountId: { type: integer, format: int64 }
+        newapiAccountId: { type: integer, format: int64, nullable: true }
+        ccproxyAccountId: { type: integer, format: int64, nullable: true }
+      required: [claimKey, customerId, accountId]
     CreateMachineRequest:
       type: object
       properties:
@@ -1376,6 +1403,15 @@ components:
         newapiAccountId: { type: integer, format: int64, nullable: true, description: "account for newapi AI usage; defaults to accountId if omitted" }
         ccproxyAccountId: { type: integer, format: int64, nullable: true, description: "account for ccproxy AI usage; defaults to accountId if omitted" }
         hostname: { type: string, description: the machine's hostname }
+        warmPoolKey:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Creates an unused warm machine. A stable key makes creation retryable within this tenant.
+            Reuse only with the same creation request. The platform account pays until claim.
+            Supported with aiMode none or ccproxy and without a legacy apiKeyId.
         offeringId: { type: integer, format: int64, description: the offering (machine type + zone + template) to provision from }
         cores: { type: integer, description: "within the offering type's coresMin..coresMax" }
         memoryMb: { type: integer, description: "within the offering type's memoryMbMin..memoryMbMax" }

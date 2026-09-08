@@ -37,8 +37,12 @@ enum class MachineStatus {
 @Table(
     name = "machine",
     indexes = [Index(columnList = "tenant_id"), Index(columnList = "tenant_id, customer_id")],
+    uniqueConstraints = [UniqueConstraint(columnNames = ["tenant_id", "warm_pool_key"])],
 )
 class Machine(
+    @Column(name = "warm_pool_key", length = 128) var warmPoolKey: String? = null,
+    @Column(name = "warm_request_hash", length = 64) var warmRequestHash: String? = null,
+    @Column(name = "warm_claim_key", length = 128) var warmClaimKey: String? = null,
     @Column(name = "tenant_id", nullable = false) var tenantId: IdType? = null,
     @Column(name = "customer_id", nullable = false) var customerId: IdType? = null,
     // Three separate fund accounts, one per cost stream, so a tenant can bill compute / newapi AI /
@@ -100,6 +104,15 @@ val Machine.effectiveCcproxyAccountId: IdType
     get() = this.ccproxyAccountId ?: this.accountId!!
 
 interface MachineRepository : JpaRepository<Machine, IdType> {
+    @Query(value = "select 1 from pg_advisory_xact_lock(:tenantId)", nativeQuery = true)
+    fun lockWarmCreation(@Param("tenantId") tenantId: IdType): Int
+
+    fun findByTenantIdAndWarmPoolKey(tenantId: IdType, warmPoolKey: String): Machine?
+
+    @org.springframework.data.jpa.repository.Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from Machine m where m.id = :id and m.tenantId = :tenantId")
+    fun lockForClaim(@Param("tenantId") tenantId: IdType, @Param("id") id: IdType): Machine?
+
     fun findByTenantId(tenantId: IdType): List<Machine>
 
     fun findByTenantIdAndCustomerId(tenantId: IdType, customerId: IdType): List<Machine>

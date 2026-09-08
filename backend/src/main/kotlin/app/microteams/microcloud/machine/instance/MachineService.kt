@@ -28,6 +28,8 @@ import app.microteams.microcloud.machine.placement.effectiveKind
 import app.microteams.microcloud.machine.type.MachineType
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
+import com.fasterxml.jackson.databind.ObjectMapper
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import org.rucca.cheese.common.error.BadRequestError
@@ -103,6 +105,7 @@ class MachineService(
     private val provisioner: MachineProvisioner,
     private val ccproxyClient: CcproxyClient,
     private val eventRepository: MachineEventRepository,
+    private val objectMapper: ObjectMapper,
 ) {
     private companion object {
         // RFC1123 hostname: dot-separated labels of [a-zA-Z0-9-], no leading/trailing hyphen, each
@@ -167,6 +170,27 @@ class MachineService(
     }
 
     fun createMachine(tenantId: IdType, request: CreateMachineRequestDTO): MachineDTO {
+        val warmKey = request.warmPoolKey
+        val warmHash =
+            warmKey?.let {
+                if (it.isBlank() || it.length > 128) throw BadRequestError("invalid warmPoolKey")
+                if (parseAiMode(request.aiMode) == AiMode.NEWAPI || request.apiKeyId != null)
+                    throw BadRequestError(
+                        "warm machines require aiMode none or ccproxy without apiKeyId"
+                    )
+                MessageDigest.getInstance("SHA-256")
+                    .digest(objectMapper.writeValueAsBytes(request))
+                    .joinToString("") { byte -> "%02x".format(byte) }
+            }
+        if (warmKey != null) {
+            // Serialize first creation as well as retries; the unique index is the final guard.
+            machineRepository.lockWarmCreation(tenantId)
+            machineRepository.findByTenantIdAndWarmPoolKey(tenantId, warmKey)?.let {
+                if (it.warmRequestHash != warmHash)
+                    throw BadRequestError("warmPoolKey was used with a different request")
+                return it.toDTO()
+            }
+        }
         // The hostname is honored verbatim as BOTH the Proxmox object name (pct `hostname` / qm VM
         // `name`) and the guest's internal hostname (LXC sets it directly; a VM's cloud-init
         // derives
@@ -219,6 +243,8 @@ class MachineService(
         val machine =
             machineRepository.saveAndFlush(
                 Machine(
+                    warmPoolKey = warmKey,
+                    warmRequestHash = warmHash,
                     tenantId = tenantId,
                     customerId = request.customerId,
                     accountId = request.accountId,
@@ -249,6 +275,51 @@ class MachineService(
         // + gateway + bridge, then init-machine over SSH (login user + sshPubkey + Claude config).
         afterCommit { provisioner.provision(saved.id!!) }
         return saved.toDTO()
+    }
+
+    fun claimWarmMachine(
+        tenantId: IdType,
+        id: IdType,
+        request: ClaimWarmMachineRequestDTO,
+    ): MachineDTO {
+        if (request.claimKey.isBlank() || request.claimKey.length > 128)
+            throw BadRequestError("invalid claimKey")
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
+        if (machine.warmPoolKey == null)
+            throw BadRequestError("machine was not created for a warm pool")
+        val newapi = request.newapiAccountId ?: request.accountId
+        val ccproxy = request.ccproxyAccountId ?: request.accountId
+        if (machine.warmClaimKey != null) {
+            if (
+                machine.warmClaimKey != request.claimKey ||
+                    machine.customerId != request.customerId ||
+                    machine.accountId != request.accountId ||
+                    machine.effectiveNewapiAccountId != newapi ||
+                    machine.effectiveCcproxyAccountId != ccproxy
+            )
+                throw BadRequestError("machine has already been claimed")
+            return machine.toDTO()
+        }
+        customerService.getCustomer(tenantId, request.customerId)
+        for (accountId in setOf(request.accountId, newapi, ccproxy)) {
+            if (accountService.getAccount(tenantId, accountId).customerId != request.customerId)
+                throw BadRequestError("claim accounts must belong to the receiving customer")
+        }
+        offeringService.getUsableForTenant(tenantId, machine.offeringId!!)
+        if (machine.aiMode == AiMode.NEWAPI || machine.apiKeyId != null)
+            throw BadRequestError("warm claim requires aiMode none or ccproxy without apiKeyId")
+        if (
+            machine.status != MachineStatus.RUNNING ||
+                machine.aiStatus !in setOf(AiStatus.READY, AiStatus.DISABLED)
+        )
+            throw BadRequestError("warm machine is not ready")
+        machine.customerId = request.customerId
+        machine.accountId = request.accountId
+        machine.newapiAccountId = newapi
+        machine.ccproxyAccountId = ccproxy
+        machine.warmClaimKey = request.claimKey
+        return machineRepository.save(machine).toDTO()
     }
 
     /**

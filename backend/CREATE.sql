@@ -223,6 +223,9 @@ CREATE
             type_id BIGINT NOT NULL,
             updated_at TIMESTAMP(6) NOT NULL,
             zone_id BIGINT,
+            warm_request_hash VARCHAR(64),
+            warm_claim_key VARCHAR(128),
+            warm_pool_key VARCHAR(128),
             ssh_pubkey VARCHAR(4096),
             ai_mode VARCHAR(255) CHECK(
                 ai_mode IN(
@@ -254,7 +257,11 @@ CREATE
                     'ERROR'
                 )
             ),
-            PRIMARY KEY(id)
+            PRIMARY KEY(id),
+            UNIQUE(
+                tenant_id,
+                warm_pool_key
+            )
         );
 
 CREATE
