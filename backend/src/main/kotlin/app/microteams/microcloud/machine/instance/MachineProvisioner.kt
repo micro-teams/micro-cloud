@@ -308,10 +308,12 @@ class MachineProvisioner(
                     "LXC template upload ${upload.id} has no vztmpl volid"
                 )
         val vmid = proxmoxClient.nextVmid(cluster)
+        lockGuest(cluster, vmid)
         val params = buildMap {
             put("vmid", vmid.toString())
             put("ostemplate", ostemplate)
             put("hostname", machine.hostname!!)
+            put("description", "microcloud-machine:${machine.id}")
             put("cores", machine.cores.toString())
             put("memory", machine.memoryMb.toString())
             put("swap", "512")
@@ -368,6 +370,7 @@ class MachineProvisioner(
                     "VM template upload ${upload.id} has no baked template vmid"
                 )
         val vmid = proxmoxClient.nextVmid(cluster)
+        lockGuest(cluster, vmid)
         awaitTask(
             machine,
             PROVISION,
@@ -380,6 +383,7 @@ class MachineProvisioner(
                 buildMap {
                     put("newid", vmid.toString())
                     put("name", machine.hostname!!)
+                    put("description", "microcloud-machine:${machine.id}")
                     put("pool", placement.pool!!)
                     put("full", "1")
                 },
@@ -534,6 +538,8 @@ class MachineProvisioner(
                 val placement = placementService.getPlacement(machine.placementId!!)
                 val cluster = proxmoxService.getCluster(placement.clusterId!!)
                 val node = placement.node!!
+                lockGuest(cluster, vmid)
+                verifyGuest(machine, cluster, node)
                 when (placement.effectiveKind) {
                     // pct destroy --purge --force tears down a running CT in one shot.
                     MachineKind.PROXMOX_LXC ->
@@ -589,6 +595,24 @@ class MachineProvisioner(
 
     private fun timeout() = config.provisioning.taskTimeoutSeconds
 
+    private fun lockGuest(cluster: ProxmoxCluster, vmid: Int) {
+        // Held through task completion and commit so creation cannot reuse an ID between
+        // another worker's ownership check and destructive request.
+        machineRepository.lockGuest("microcloud-guest:${cluster.id}:$vmid")
+    }
+
+    private fun verifyGuest(machine: Machine, cluster: ProxmoxCluster, node: String) {
+        proxmoxClient.verifyGuestIdentity(
+            cluster,
+            node,
+            machine.vmid!!,
+            kindOf(machine) == MachineKind.PROXMOX_VM,
+            machine.id!!,
+            machine.hostname!!,
+            machine.ip!!,
+        )
+    }
+
     /**
      * Run one Proxmox task on the machine's guest — [submit] returns what it submitted and the
      * UPID, or null when there is no guest yet — then land the given terminal status (or ERROR),
@@ -604,6 +628,10 @@ class MachineProvisioner(
         try {
             val cluster = clusterOf(machine)
             val node = placementService.getPlacement(machine.placementId!!).node!!
+            machine.vmid?.let {
+                lockGuest(cluster, it)
+                verifyGuest(machine, cluster, node)
+            }
             submit(machine, cluster, node)?.let { (what, upid) ->
                 awaitTask(machine, action, what, cluster, upid)
             }

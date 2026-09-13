@@ -104,6 +104,12 @@ val Machine.effectiveCcproxyAccountId: IdType
     get() = this.ccproxyAccountId ?: this.accountId!!
 
 interface MachineRepository : JpaRepository<Machine, IdType> {
+    @Query(
+        value = "select 1 from pg_advisory_xact_lock(hashtextextended(:guest, 0))",
+        nativeQuery = true,
+    )
+    fun lockGuest(@Param("guest") guest: String): Int
+
     @Query(value = "select 1 from pg_advisory_xact_lock(:tenantId)", nativeQuery = true)
     fun lockWarmCreation(@Param("tenantId") tenantId: IdType): Int
 

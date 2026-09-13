@@ -20,6 +20,9 @@ import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
+import io.mockk.clearMocks
+import io.mockk.every
+import io.mockk.verify
 import org.json.JSONObject
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation
@@ -378,5 +381,61 @@ constructor(
         mockMvc
             .perform(post("/machine/$id/stop").header("Authorization", "Bearer $secret"))
             .andExpect(status().isAccepted)
+    }
+
+    @Test
+    @Order(7)
+    fun reusedGuestIsNeverDestroyedAndLeaseRemainsVisible() {
+        val id =
+            JSONObject(
+                    mockMvc
+                        .perform(get("/machine").header("Authorization", "Bearer $secret"))
+                        .andReturn()
+                        .response
+                        .contentAsString
+                )
+                .getJSONArray("items")
+                .getJSONObject(0)
+                .getLong("id")
+        // Let the previous lifecycle action finish before installing the rejection.
+        repeat(50) {
+            val state =
+                JSONObject(
+                        mockMvc
+                            .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                            .andReturn()
+                            .response
+                            .contentAsString
+                    )
+                    .getString("status")
+            if (state == "stopped" || state == "running") return@repeat
+            Thread.sleep(100)
+        }
+        clearMocks(proxmoxClient, answers = false)
+        every {
+            proxmoxClient.verifyGuestIdentity(any(), any(), any(), any(), any(), any(), any())
+        } throws IllegalStateException("Guest belongs to a replacement machine")
+        mockMvc
+            .perform(delete("/machine/$id").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        var failed = false
+        for (attempt in 0 until 50) {
+            val response =
+                mockMvc
+                    .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                    .andExpect(status().isOk)
+                    .andReturn()
+                    .response
+                    .contentAsString
+            if (JSONObject(response).getString("status") == "error") {
+                failed = true
+                break
+            }
+            Thread.sleep(100)
+        }
+        org.junit.jupiter.api.Assertions.assertTrue(failed)
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.destroyVm(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.stopVm(any(), any(), any()) }
     }
 }
