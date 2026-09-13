@@ -275,6 +275,41 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
 
     // ---- LXC lifecycle (used by machine provisioning) ----
 
+    /** Numeric guest IDs are reusable; never treat one as proof of ownership. */
+    fun verifyGuestIdentity(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        vm: Boolean,
+        machineId: Long,
+        hostname: String,
+        ip: String,
+    ) {
+        val kind = if (vm) "qemu" else "lxc"
+        // An unreadable/missing guest is not evidence that deletion is safe. In particular,
+        // a pool-scoped token returns 403 for absent guests; preserve the error and fail closed.
+        val config = send(cluster, "GET", "/nodes/$node/$kind/$vmid/config", null)
+        val marker = config.path("description").asText("").trim()
+        val expected = "microcloud-machine:$machineId"
+        if (marker.startsWith("microcloud-machine:")) {
+            check(marker == expected) { "Guest $vmid belongs to another machine" }
+            return
+        }
+        // Guests predating ownership markers retain their original hostname and static IP;
+        // warm claim changes billing ownership only. Require both before any mutation.
+        val name = config.path(if (vm) "name" else "hostname").asText("")
+        val network = config.path(if (vm) "ipconfig0" else "net0").asText("")
+        val address =
+            network
+                .split(',')
+                .firstOrNull { it.startsWith("ip=") }
+                ?.removePrefix("ip=")
+                ?.substringBefore('/')
+        check(name == hostname && address == ip) {
+            "Guest $vmid identity does not match machine $machineId"
+        }
+    }
+
     /** Next free VM/CT id in the cluster. */
     fun nextVmid(cluster: ProxmoxCluster): Int =
         send(cluster, "GET", "/cluster/nextid", null).asText().toInt()
