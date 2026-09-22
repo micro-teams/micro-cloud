@@ -220,6 +220,13 @@ def harden() -> None:
     sshd = "/etc/ssh/sshd_config"
     if os.path.isfile(sshd):
         run(["sed", "-i", "s/^#*PermitRootLogin.*/PermitRootLogin no/", sshd])
+        os.makedirs("/etc/ssh/sshd_config.d", exist_ok=True)
+        liveness = "/etc/ssh/sshd_config.d/10-microcloud-liveness.conf"
+        with open(liveness, "w") as f:
+            # Resume preserves dead SSH sessions too; expire them to free forwarded ports.
+            f.write("ClientAliveInterval 15\nClientAliveCountMax 2\n")
+        os.chmod(liveness, 0o644)
+        run(["/usr/sbin/sshd", "-t"])
         if subprocess.run(["systemctl", "restart", "ssh"], check=False).returncode != 0:
             subprocess.run(["systemctl", "restart", "sshd"], check=False)
     if _has("ufw"):
