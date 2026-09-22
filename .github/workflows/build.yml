@@ -159,6 +159,7 @@ jobs:
           sed -i "s#image: ${BASE}:21-jre#image: ${BASE}@${DIGEST}#" "$STAGE/docker-compose.yml"
           grep -q "${BASE}@sha256:" "$STAGE/docker-compose.yml" || { echo "digest pin failed"; exit 1; }
           cp -r deploy/init "$STAGE/"
+          cp -r deploy/migrations "$STAGE/"
           cp artifacts/jar/*.jar "$STAGE/backend/backend.jar"
           cp -r artifacts/frontend-dist/. "$STAGE/frontend/dist/"
           # The LXC template is a core part of the system, so it ships in the bundle: the built

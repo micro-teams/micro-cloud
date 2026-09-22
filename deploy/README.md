@@ -153,6 +153,26 @@ No manual step. `ddl-auto=update` just adds the new **nullable** `machine.ccprox
 - Machine templates now preinstall `git`, `tmux`, and `jujutsu (jj)` on both LXC and VM offerings;
   re-bake/rebuild templates to pick these up on existing deployments.
 
+### Upgrading to machine suspend/resume
+
+Before starting the new backend, back up the database and apply `migrations/machine-suspend.sql`
+to the deployment database. It replaces the checks on `machine.status` and `machine_event.action`
+to allow the new states and events. Hibernate's `ddl-auto=update` does not update these checks.
+Fresh databases use the generated schema and need no migration.
+
+`POST /machine/{id}/suspend` retains the machine ID, IP, disks and account assignments:
+
+- VM placements save memory to disk and release host RAM. Resume restores the saved processes.
+  Checkpoint failure reports `error` without shutting down the VM as a fallback.
+- LXC placements shut down gracefully and retain their disks but not memory. Resume boots the existing container;
+  processes restart. Save work before suspending an LXC container.
+
+Poll `GET /machine/{id}` until `suspended`, then use `POST /machine/{id}/resume` and poll until
+`running`. Either operation can finish in `error`; inspect the machine event log in that case.
+Resume does not provision another guest or repeat guest initialization. Network connections may
+need to reconnect. These endpoints perform explicit requests; they add no automatic expiry or
+idle shutdown policy.
+
 ## Provisioning (reaching Proxmox and the machines)
 
 The backend talks to the Proxmox API and, to initialize each new container, SSHes into it on the

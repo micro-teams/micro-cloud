@@ -340,6 +340,18 @@ class MachineController(
     ): ResponseEntity<MachineDTO> =
         ResponseEntity.accepted().body(machineService.startMachine(tenantId(), id))
 
+    @Guard("stop-machine", "machine")
+    override fun suspendMachine(
+        @PathVariable("id") @ResourceId id: IdType
+    ): ResponseEntity<MachineDTO> =
+        ResponseEntity.accepted().body(machineService.suspendMachine(tenantId(), id))
+
+    @Guard("start-machine", "machine")
+    override fun resumeMachine(
+        @PathVariable("id") @ResourceId id: IdType
+    ): ResponseEntity<MachineDTO> =
+        ResponseEntity.accepted().body(machineService.resumeMachine(tenantId(), id))
+
     @Guard("shutdown-machine", "machine")
     override fun shutdownMachine(
         @PathVariable("id") @ResourceId id: IdType

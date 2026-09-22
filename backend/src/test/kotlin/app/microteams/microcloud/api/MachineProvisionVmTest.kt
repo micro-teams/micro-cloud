@@ -225,6 +225,26 @@ constructor(
         // refuses a running VM — and never take the LXC destroy path.
         waitForStatus(machineId, "running", secret)
         mockMvc
+            .perform(post("/machine/$machineId/suspend").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitForStatus(machineId, "suspended", secret)
+        verify(exactly = 1) { proxmoxClient.suspendVm(any(), eq("pve"), any()) }
+        mockMvc
+            .perform(post("/machine/$machineId/resume").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitForStatus(machineId, "running", secret)
+        verify(exactly = 1) { proxmoxClient.resumeVm(any(), eq("pve"), any()) }
+        verify(exactly = 1) { proxmoxClient.cloneVm(any(), any(), any(), any()) }
+        every { proxmoxClient.suspendVm(any(), any(), any()) } throws
+            IllegalStateException("checkpoint storage unavailable")
+        mockMvc
+            .perform(post("/machine/$machineId/suspend").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitForStatus(machineId, "error", secret)
+        verify(exactly = 0) { proxmoxClient.shutdownVm(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.stopVm(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.destroyVm(any(), any(), any()) }
+        mockMvc
             .perform(delete("/machine/$machineId").header("Authorization", "Bearer $secret"))
             .andExpect(status().isAccepted)
         verify(timeout = 5000) { proxmoxClient.destroyVm(any(), eq("pve"), any()) }

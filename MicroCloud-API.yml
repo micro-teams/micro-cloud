@@ -713,6 +713,37 @@ paths:
         "202": { description: "Accepted — start requested (status 'starting'); poll GET for 'running'", content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /machine/{id}/suspend:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: suspendMachine
+      summary: Suspend a running machine while retaining its disks and identity
+      description: >-
+        Retains the machine identity, IP and disks. Poll until suspended or error.
+        VM placements save memory to disk and restore processes on resume; a failed checkpoint
+        is reported as error without falling back to shutdown. LXC placements shut down gracefully
+        and start fresh processes on resume; memory is not retained. Save work before suspending LXC.
+        No machine is deleted. Call only after stopping new work. Network connections may need to reconnect.
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /machine/{id}/resume:
+    parameters: [ { $ref: "#/components/parameters/IdPath" } ]
+    post:
+      tags: [machine]
+      operationId: resumeMachine
+      summary: Resume a suspended machine
+      description: >-
+        Restores saved memory for VM placements; boots LXC placements with their existing disks.
+        Uses the same machine without provisioning or rerunning guest initialization. Poll until running or error.
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/Machine" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /machine/{id}/shutdown:
     parameters: [ { $ref: "#/components/parameters/IdPath" } ]
     post:
@@ -1343,7 +1374,7 @@ components:
     # operation was accepted and the caller polls GET /machine/{id} until a terminal state.
     MachineStatus:
       type: string
-      enum: [provisioning, starting, running, stopping, stopped, deleting, deleted, error]
+      enum: [provisioning, starting, running, suspending, suspended, resuming, stopping, stopped, deleting, deleted, error]
     MachineAiStatus:
       type: object
       description: A machine's AI mode/status after a switch action.
@@ -1441,7 +1472,7 @@ components:
         START / SHUTDOWN / STOP: the matching Proxmox task. DELETE: teardown (Proxmox, AI, IP).
         AI_SWITCH: a switch of the machine's Claude Code between newapi and ccproxy. AI_LOGIN: a
         ccproxy subscription login, from start to ready.
-      enum: [PROVISION, START, SHUTDOWN, STOP, DELETE, AI_SWITCH, AI_LOGIN]
+      enum: [PROVISION, START, SUSPEND, RESUME, SHUTDOWN, STOP, DELETE, AI_SWITCH, AI_LOGIN]
     MachineEventPhase:
       type: string
       description: >-
