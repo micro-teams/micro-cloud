@@ -67,6 +67,9 @@ fun Machine.toDTO() =
                 MachineStatus.PROVISIONING -> MachineStatusDTO.provisioning
                 MachineStatus.STARTING -> MachineStatusDTO.starting
                 MachineStatus.RUNNING -> MachineStatusDTO.running
+                MachineStatus.SUSPENDING -> MachineStatusDTO.suspending
+                MachineStatus.SUSPENDED -> MachineStatusDTO.suspended
+                MachineStatus.RESUMING -> MachineStatusDTO.resuming
                 MachineStatus.STOPPING -> MachineStatusDTO.stopping
                 MachineStatus.STOPPED -> MachineStatusDTO.stopped
                 MachineStatus.DELETING -> MachineStatusDTO.deleting
@@ -375,7 +378,8 @@ class MachineService(
     }
 
     fun startMachine(tenantId: IdType, id: IdType): MachineDTO {
-        val machine = getMachine(tenantId, id)
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
         if (machine.status == MachineStatus.STOPPED) {
             machine.status = MachineStatus.STARTING
             machineRepository.save(machine)
@@ -384,9 +388,36 @@ class MachineService(
         return machine.toDTO()
     }
 
+    fun suspendMachine(tenantId: IdType, id: IdType): MachineDTO {
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
+        if (machine.status in setOf(MachineStatus.SUSPENDING, MachineStatus.SUSPENDED))
+            return machine.toDTO()
+        if (machine.status != MachineStatus.RUNNING)
+            throw BadRequestError("only a running machine can be suspended")
+        machine.status = MachineStatus.SUSPENDING
+        machineRepository.save(machine)
+        afterCommit { provisioner.suspendMachine(id) }
+        return machine.toDTO()
+    }
+
+    fun resumeMachine(tenantId: IdType, id: IdType): MachineDTO {
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
+        if (machine.status in setOf(MachineStatus.RESUMING, MachineStatus.RUNNING))
+            return machine.toDTO()
+        if (machine.status != MachineStatus.SUSPENDED)
+            throw BadRequestError("only a suspended machine can be resumed")
+        machine.status = MachineStatus.RESUMING
+        machineRepository.save(machine)
+        afterCommit { provisioner.resumeMachine(id) }
+        return machine.toDTO()
+    }
+
     /** Graceful shutdown (ACPI): the guest flushes its FS and powers off cleanly. Preferred. */
     fun shutdownMachine(tenantId: IdType, id: IdType): MachineDTO {
-        val machine = getMachine(tenantId, id)
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
         if (machine.status == MachineStatus.RUNNING) {
             machine.status = MachineStatus.STOPPING
             machineRepository.save(machine)
@@ -397,7 +428,8 @@ class MachineService(
 
     /** HARD stop (pull the plug): no FS flush. Force path; prefer [shutdownMachine]. */
     fun stopMachine(tenantId: IdType, id: IdType): MachineDTO {
-        val machine = getMachine(tenantId, id)
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
         if (machine.status == MachineStatus.RUNNING) {
             machine.status = MachineStatus.STOPPING
             machineRepository.save(machine)
@@ -407,7 +439,10 @@ class MachineService(
     }
 
     fun deleteMachine(tenantId: IdType, id: IdType): MachineDTO {
-        val machine = getMachine(tenantId, id)
+        val machine =
+            machineRepository.lockForClaim(tenantId, id) ?: throw NotFoundError("machine", id)
+        if (machine.status in setOf(MachineStatus.SUSPENDING, MachineStatus.RESUMING))
+            throw BadRequestError("wait for the machine's suspend or resume operation to finish")
         machine.status = MachineStatus.DELETING
         machineRepository.save(machine)
         // async: destroy the CT, release its IP, remove the row (or land ERROR on failure).

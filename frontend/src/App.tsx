@@ -506,6 +506,8 @@ function tenantNav(token: string): NavItem[] {
           onCreate={create(token, "/machine")}
           actions={[
             { label: "start", run: (row) => request("POST", `/machine/${row.id}/start`, t(token)) },
+            { label: "suspend", confirm: "Suspend this machine? VMs retain memory; LXC containers shut down and retain disks only. Save work before continuing.", run: (row) => request("POST", `/machine/${row.id}/suspend`, t(token)) },
+            { label: "resume", run: (row) => request("POST", `/machine/${row.id}/resume`, t(token)) },
             { label: "shutdown", run: (row) => request("POST", `/machine/${row.id}/shutdown`, t(token)) },
             { label: "stop (force)", confirm: "HARD-stop (pull the plug, no FS flush)? Prefer shutdown.", run: (row) => request("POST", `/machine/${row.id}/stop`, t(token)) },
             // AI switch (super-admin): newapi relay <-> ccproxy subscription. Needs a super-admin

@@ -250,6 +250,9 @@ CREATE
                     'PROVISIONING',
                     'STARTING',
                     'RUNNING',
+                    'SUSPENDING',
+                    'SUSPENDED',
+                    'RESUMING',
                     'STOPPING',
                     'STOPPED',
                     'DELETING',
@@ -279,6 +282,8 @@ CREATE
                 ACTION IN(
                     'PROVISION',
                     'START',
+                    'SUSPEND',
+                    'RESUME',
                     'SHUTDOWN',
                     'STOP',
                     'DELETE',

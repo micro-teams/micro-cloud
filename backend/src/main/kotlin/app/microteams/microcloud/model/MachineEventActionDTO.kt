@@ -7,12 +7,15 @@ import com.fasterxml.jackson.annotation.JsonValue
  * The lifecycle action an event belongs to. PROVISION: create on Proxmox through to running. START
  * / SHUTDOWN / STOP: the matching Proxmox task. DELETE: teardown (Proxmox, AI, IP). AI_SWITCH: a
  * switch of the machine's Claude Code between newapi and ccproxy. AI_LOGIN: a ccproxy subscription
- * login, from start to ready. Values: PROVISION,START,SHUTDOWN,STOP,DELETE,AI_SWITCH,AI_LOGIN
+ * login, from start to ready. Values:
+ * PROVISION,START,SUSPEND,RESUME,SHUTDOWN,STOP,DELETE,AI_SWITCH,AI_LOGIN
  */
 enum class MachineEventActionDTO(@get:JsonValue val value: kotlin.String) {
 
     PROVISION("PROVISION"),
     START("START"),
+    SUSPEND("SUSPEND"),
+    RESUME("RESUME"),
     SHUTDOWN("SHUTDOWN"),
     STOP("STOP"),
     DELETE("DELETE"),

@@ -469,6 +469,40 @@ class MachineProvisioner(
         )
     }
 
+    @Async
+    @Transactional
+    fun suspendMachine(machineId: Long) =
+        runTask(machineId, MachineEventAction.SUSPEND, MachineStatus.SUSPENDED) {
+            machine,
+            cluster,
+            node ->
+            val vmid = checkNotNull(machine.vmid) { "machine has no guest" }
+            when (kindOf(machine)) {
+                MachineKind.PROXMOX_LXC ->
+                    "shutdown CT$vmid (retain disks) on $node" to
+                        proxmoxClient.shutdownLxc(cluster, node, vmid)
+                MachineKind.PROXMOX_VM ->
+                    "hibernate VM$vmid on $node" to proxmoxClient.suspendVm(cluster, node, vmid)
+            }
+        }
+
+    @Async
+    @Transactional
+    fun resumeMachine(machineId: Long) =
+        runTask(machineId, MachineEventAction.RESUME, MachineStatus.RUNNING) {
+            machine,
+            cluster,
+            node ->
+            val vmid = checkNotNull(machine.vmid) { "machine has no guest" }
+            when (kindOf(machine)) {
+                MachineKind.PROXMOX_LXC ->
+                    "start CT$vmid (existing disks) on $node" to
+                        proxmoxClient.startLxc(cluster, node, vmid)
+                MachineKind.PROXMOX_VM ->
+                    "resume VM$vmid on $node" to proxmoxClient.resumeVm(cluster, node, vmid)
+            }
+        }
+
     /** Async start (pct/qm per kind): STARTING -> RUNNING / ERROR. */
     @Async
     @Transactional

@@ -1191,6 +1191,43 @@ interface MachineApi {
 
     @Operation(
         tags = ["machine"],
+        summary = "Resume a suspended machine",
+        operationId = "resumeMachine",
+        description =
+            """Restores saved memory for VM placements; boots LXC placements with their existing disks. Uses the same machine without provisioning or rerunning guest initialization. Poll until running or error.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "202",
+                    description = "Accepted",
+                    content = [Content(schema = Schema(implementation = MachineDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "tenantSecret")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/resume"],
+        produces = ["application/json"],
+    )
+    fun resumeMachine(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
+    ): ResponseEntity<MachineDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
         summary =
             "Gracefully shut a running machine down (async; ACPI, flushes the FS; preferred over stop)",
         operationId = "shutdownMachine",
@@ -1282,6 +1319,43 @@ interface MachineApi {
         produces = ["application/json"],
     )
     fun stopMachine(
+        @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
+    ): ResponseEntity<MachineDTO> {
+        return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)
+    }
+
+    @Operation(
+        tags = ["machine"],
+        summary = "Suspend a running machine while retaining its disks and identity",
+        operationId = "suspendMachine",
+        description =
+            """Retains the machine identity, IP and disks. Poll until suspended or error. VM placements save memory to disk and restore processes on resume; a failed checkpoint is reported as error without falling back to shutdown. LXC placements shut down gracefully and start fresh processes on resume; memory is not retained. Save work before suspending LXC. No machine is deleted. Call only after stopping new work. Network connections may need to reconnect.""",
+        responses =
+            [
+                ApiResponse(
+                    responseCode = "202",
+                    description = "Accepted",
+                    content = [Content(schema = Schema(implementation = MachineDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "400",
+                    description = "Bad Request",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+                ApiResponse(
+                    responseCode = "404",
+                    description = "Not Found",
+                    content = [Content(schema = Schema(implementation = ErrorDTO::class))],
+                ),
+            ],
+        security = [SecurityRequirement(name = "tenantSecret")],
+    )
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/machine/{id}/suspend"],
+        produces = ["application/json"],
+    )
+    fun suspendMachine(
         @Parameter(description = "", required = true) @PathVariable("id") id: kotlin.Long
     ): ResponseEntity<MachineDTO> {
         return ResponseEntity(HttpStatus.NOT_IMPLEMENTED)

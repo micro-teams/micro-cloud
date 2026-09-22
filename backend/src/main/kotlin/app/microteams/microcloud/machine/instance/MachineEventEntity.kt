@@ -26,6 +26,8 @@ enum class MachineEventAction {
     /** Create on Proxmox, boot, init, AI setup — through to RUNNING. */
     PROVISION,
     START,
+    SUSPEND,
+    RESUME,
     SHUTDOWN,
     STOP,
     /** Teardown: the Proxmox guest, the AI registrations, the leased IP. */

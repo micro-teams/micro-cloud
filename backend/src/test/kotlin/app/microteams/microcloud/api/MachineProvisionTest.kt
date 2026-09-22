@@ -362,6 +362,65 @@ constructor(
 
     @Test
     @Order(6)
+    fun suspendRetainsIdentityAndResumeDoesNotProvisionAgain() {
+        val id =
+            JSONObject(
+                    mockMvc
+                        .perform(get("/machine").header("Authorization", "Bearer $secret"))
+                        .andReturn()
+                        .response
+                        .contentAsString
+                )
+                .getJSONArray("items")
+                .getJSONObject(0)
+                .getLong("id")
+        fun state(): JSONObject =
+            JSONObject(
+                mockMvc
+                    .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                    .andExpect(status().isOk)
+                    .andReturn()
+                    .response
+                    .contentAsString
+            )
+        fun await(expected: String) {
+            for (attempt in 0 until 100) {
+                if (state().getString("status") == expected) return
+                Thread.sleep(50)
+            }
+            error("machine did not reach $expected: ${state()}")
+        }
+        await("running")
+        val before = state()
+        clearMocks(proxmoxClient, answers = false)
+        mockMvc
+            .perform(post("/machine/$id/suspend").header("Authorization", "Bearer $otherSecret"))
+            .andExpect(status().isForbidden)
+        mockMvc
+            .perform(post("/machine/$id/suspend").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        await("suspended")
+        mockMvc
+            .perform(post("/machine/$id/suspend").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        mockMvc
+            .perform(post("/machine/$id/resume").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        await("running")
+        val after = state()
+        for (field in listOf("id", "ip", "hostname", "customerId", "accountId")) org.junit.jupiter
+            .api
+            .Assertions
+            .assertEquals(before.get(field), after.get(field))
+        verify(exactly = 1) { proxmoxClient.shutdownLxc(any(), any(), any()) }
+        verify(exactly = 1) { proxmoxClient.startLxc(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.createLxc(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.stopLxc(any(), any(), any()) }
+    }
+
+    @Test
+    @Order(7)
     fun startStopLifecycle() {
         // Provision a fresh machine on the released address is not guaranteed here; reuse listing.
         val id =
@@ -384,7 +443,7 @@ constructor(
     }
 
     @Test
-    @Order(7)
+    @Order(8)
     fun reusedGuestIsNeverDestroyedAndLeaseRemainsVisible() {
         val id =
             JSONObject(

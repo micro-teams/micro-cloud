@@ -225,6 +225,13 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
     fun startVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/start", emptyMap()).asText()
 
+    fun suspendVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/suspend", mapOf("todisk" to "1"))
+            .asText()
+
+    fun resumeVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
+        send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/resume", emptyMap()).asText()
+
     /** HARD stop (pull the plug): no guest FS sync. Prefer [shutdownVm] except when destroying. */
     fun stopVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/qemu/$vmid/status/stop", emptyMap()).asText()
