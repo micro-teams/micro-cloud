@@ -25,6 +25,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import org.rucca.cheese.common.error.BadRequestError
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
 /** An inventory snapshot read live from a Proxmox cluster. */
@@ -354,20 +355,46 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
      * across — so we always poll the UPID's own node.
      */
     fun waitForTask(cluster: ProxmoxCluster, upid: String, timeoutSeconds: Long = 120) {
+        val parts = upid.split(":")
         val node =
-            upid.split(":").getOrNull(1)?.takeIf { it.isNotBlank() }
+            parts.getOrNull(1)?.takeIf { it.isNotBlank() }
                 ?: throw BadRequestError("malformed Proxmox UPID: $upid")
+        val startingLxc =
+            if (parts.getOrNull(5) == "vzstart") parts.getOrNull(6)?.toIntOrNull() else null
         val deadline = timeoutSeconds
         var waited = 0L
+        var monitorFailure: String? = null
         while (waited < deadline) {
             val status = send(cluster, "GET", "/nodes/$node/tasks/$upid/status", null)
             if (status.path("status").asText() == "stopped") {
                 val exit = status.path("exitstatus").asText("")
-                if (exit != "OK") throw BadRequestError("Proxmox task $upid failed: $exit")
-                return
+                if (exit == "OK") return
+                // Proxmox can finish vzstart before the new LXC monitor exposes its PID.
+                // Reconcile that specific result without issuing another start request.
+                if (
+                    startingLxc == null ||
+                        exit != "unable to get PID for CT $startingLxc (not running?)"
+                ) {
+                    throw BadRequestError("Proxmox task $upid failed: $exit")
+                }
+                if (monitorFailure == null) {
+                    LoggerFactory.getLogger(javaClass)
+                        .warn("Proxmox task {} reported {}; checking container state", upid, exit)
+                    monitorFailure = exit
+                }
+                if (lxcStatus(cluster, node, startingLxc) == "running") {
+                    LoggerFactory.getLogger(javaClass)
+                        .info("Proxmox task {} recovered: CT{} is running", upid, startingLxc)
+                    return
+                }
             }
             Thread.sleep(2000)
             waited += 2
+        }
+        if (monitorFailure != null) {
+            throw BadRequestError(
+                "Proxmox task $upid failed: $monitorFailure; container did not reach running within ${timeoutSeconds}s"
+            )
         }
         throw BadRequestError("Proxmox task $upid did not finish within ${timeoutSeconds}s")
     }
