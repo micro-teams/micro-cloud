@@ -40,6 +40,12 @@ data class ProxmoxInventory(
     data class BridgeEntry(val node: String, val bridge: String, val cidr: String?)
 }
 
+/**
+ * The task was still running when the wait gave up. Unlike a task that stopped with an error, its
+ * work may still land, so a caller that created a guest must assume the guest will exist.
+ */
+class ProxmoxTaskTimeout(message: String) : RuntimeException(message)
+
 @Component
 class ProxmoxClient(private val objectMapper: ObjectMapper) {
 
@@ -396,7 +402,7 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
                 "Proxmox task $upid failed: $monitorFailure; container did not reach running within ${timeoutSeconds}s"
             )
         }
-        throw BadRequestError("Proxmox task $upid did not finish within ${timeoutSeconds}s")
+        throw ProxmoxTaskTimeout("Proxmox task $upid did not finish within ${timeoutSeconds}s")
     }
 
     /** GET `/api2/json{path}` and return the elements of the `data` array. */

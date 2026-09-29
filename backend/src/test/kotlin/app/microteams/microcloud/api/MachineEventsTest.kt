@@ -20,6 +20,7 @@ import app.microteams.microcloud.machine.ai.CcproxyClient
 import app.microteams.microcloud.machine.ai.CcproxyLoginRequest
 import app.microteams.microcloud.machine.ai.CcproxyMachine
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
+import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.template.MachineTemplate
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
@@ -27,6 +28,7 @@ import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.every
+import io.mockk.verify
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -439,5 +441,53 @@ constructor(
         mockMvc
             .perform(get("/machine/999999/events").header("Authorization", "Bearer $secret"))
             .andExpect(status().isNotFound)
+    }
+
+    private fun deleteAndWaitUntilGone(id: Long) {
+        mockMvc
+            .perform(delete("/machine/$id").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitUntil(10, "machine $id deleted") {
+            mockMvc
+                .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                .andReturn()
+                .response
+                .status == 404
+        }
+    }
+
+    @Test
+    @Order(90)
+    fun deletingAMachineWhoseCreateTimedOutDestroysTheGuestItStarted() {
+        // The create task outlives the wait; Proxmox finishes it later and the guest runs.
+        every { proxmoxClient.nextVmid(any()) } returns 4201
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4201"
+        every { proxmoxClient.waitForTask(any(), "UPID:pve:create-4201", any()) } throws
+            ProxmoxTaskTimeout("Proxmox task UPID:pve:create-4201 did not finish within 180s")
+        val id = createMachine("late-guest")
+        waitForStatus(id, "error")
+
+        deleteAndWaitUntilGone(id)
+
+        verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4201) }
+    }
+
+    @Test
+    @Order(91)
+    fun deletingAMachineWhoseCreateFailedDoesNotTouchTheVmid() {
+        // A create task that stopped with an error left no guest; its vmid may be reused.
+        every { proxmoxClient.nextVmid(any()) } returns 4202
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4202"
+        every { proxmoxClient.waitForTask(any(), "UPID:pve:create-4202", any()) } throws
+            BadRequestError("Proxmox task UPID:pve:create-4202 failed: unable to create CT 4202")
+        val id = createMachine("failed-create")
+        waitForStatus(id, "error")
+
+        deleteAndWaitUntilGone(id)
+
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), 4202) }
+        verify(exactly = 0) {
+            proxmoxClient.verifyGuestIdentity(any(), any(), 4202, any(), any(), any(), any())
+        }
     }
 }
