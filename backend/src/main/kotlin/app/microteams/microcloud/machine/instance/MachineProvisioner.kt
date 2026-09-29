@@ -44,6 +44,7 @@ import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
+import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
@@ -331,15 +332,16 @@ class MachineProvisioner(
             put("start", "1")
         }
 
-        awaitTask(
-            machine,
-            PROVISION,
-            "pct create CT$vmid on $node (from $ostemplate, started)",
-            cluster,
-            proxmoxClient.createLxc(cluster, node, params),
-        )
-        machine.vmid = vmid
-        machineRepository.save(machine)
+        val upid = proxmoxClient.createLxc(cluster, node, params)
+        awaitCreate(machine, vmid) {
+            awaitTask(
+                machine,
+                PROVISION,
+                "pct create CT$vmid on $node (from $ostemplate, started)",
+                cluster,
+                upid,
+            )
+        }
 
         runInit(machine, network.gateway!!, aiInitSuffix)
     }
@@ -371,11 +373,7 @@ class MachineProvisioner(
                 )
         val vmid = proxmoxClient.nextVmid(cluster)
         lockGuest(cluster, vmid)
-        awaitTask(
-            machine,
-            PROVISION,
-            "qm clone VM$vmid from template VM$templateVmid on $node",
-            cluster,
+        val upid =
             proxmoxClient.cloneVm(
                 cluster,
                 node,
@@ -387,10 +385,16 @@ class MachineProvisioner(
                     put("pool", placement.pool!!)
                     put("full", "1")
                 },
-            ),
-        )
-        machine.vmid = vmid
-        machineRepository.save(machine)
+            )
+        awaitCreate(machine, vmid) {
+            awaitTask(
+                machine,
+                PROVISION,
+                "qm clone VM$vmid from template VM$templateVmid on $node",
+                cluster,
+                upid,
+            )
+        }
 
         // cloud-init keys = the login user's key + the operator key (so the backend can SSH in for
         // init). Multiple keys are newline-separated; the whole blob is URL-encoded once.
@@ -628,6 +632,26 @@ class MachineProvisioner(
     }
 
     private fun timeout() = config.provisioning.taskTimeoutSeconds
+
+    /**
+     * Wait on the task creating guest [vmid], owning the vmid from submission. A create that
+     * outlives the wait still lands its guest; had the vmid been recorded only on success, delete
+     * would skip the destroy and free the IP under a running guest, and the next machine leased
+     * that IP (machine 1951's CT253 on 2026-09-29). A task that stopped with an error leaves no
+     * guest, so the vmid is dropped and delete does not fail on a guest that was never there.
+     */
+    private fun awaitCreate(machine: Machine, vmid: Int, wait: () -> Unit) {
+        machine.vmid = vmid
+        machineRepository.save(machine)
+        try {
+            wait()
+        } catch (e: ProxmoxTaskTimeout) {
+            throw e
+        } catch (e: Exception) {
+            machine.vmid = null
+            throw e
+        }
+    }
 
     private fun lockGuest(cluster: ProxmoxCluster, vmid: Int) {
         // Held through task completion and commit so creation cannot reuse an ID between
