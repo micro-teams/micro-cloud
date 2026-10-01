@@ -490,4 +490,96 @@ constructor(
             proxmoxClient.verifyGuestIdentity(any(), any(), 4202, any(), any(), any(), any())
         }
     }
+
+    /** The first wait on [upid] runs out; the next one ends as [then] says. */
+    private fun taskOutlivesTheWait(upid: String, then: () -> Unit) {
+        val waits = AtomicInteger()
+        every { proxmoxClient.waitForTask(any(), upid, any()) } answers
+            {
+                if (waits.incrementAndGet() == 1)
+                    throw ProxmoxTaskTimeout("Proxmox task $upid did not finish within 180s")
+                then()
+            }
+    }
+
+    @Test
+    @Order(92)
+    fun aCreateThatOutlivesTheWaitRunsOnceItsTaskFinishes() {
+        // Machine 2036 on 2026-10-01: pct create finished OK 5 s after the 180 s wait gave up.
+        every { proxmoxClient.nextVmid(any()) } returns 4203
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4203"
+        taskOutlivesTheWait("UPID:pve:create-4203") {}
+        val id = createMachine("slow-create")
+        waitForStatus(id, "running")
+
+        val items = events(id)
+        assertEquals(
+            listOf(
+                "STARTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "RUNNING",
+            ),
+            phases(items, "PROVISION"),
+        )
+        val stillRunning = items.getJSONObject(2)
+        assertEquals("WARN", stillRunning.getString("level"))
+        assertTrue(stillRunning.getString("message").contains("outcome is unknown"))
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), 4203) }
+    }
+
+    @Test
+    @Order(93)
+    fun aCreateThatOutlivesTheWaitAndThenFailsLeavesNoGuestBehind() {
+        every { proxmoxClient.nextVmid(any()) } returns 4204
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4204"
+        taskOutlivesTheWait("UPID:pve:create-4204") {
+            throw BadRequestError("Proxmox task UPID:pve:create-4204 failed: unable to create CT")
+        }
+        val id = createMachine("slow-failed-create")
+        waitForStatus(id, "error")
+
+        deleteAndWaitUntilGone(id)
+
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), 4204) }
+    }
+
+    @Test
+    @Order(94)
+    fun aFailedCreateThatLeftItsGuestBehindDestroysIt() {
+        every { proxmoxClient.nextVmid(any()) } returns 4205
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4205"
+        every { proxmoxClient.waitForTask(any(), "UPID:pve:create-4205", any()) } throws
+            BadRequestError("Proxmox task UPID:pve:create-4205 failed: start failed")
+        every { proxmoxClient.ownsGuest(any(), any(), 4205, false, any(), any(), any()) } returns
+            true
+        every { proxmoxClient.destroyLxc(any(), any(), 4205) } returns "UPID:pve:destroy-4205"
+        val id = createMachine("half-create")
+        waitForStatus(id, "error")
+        verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4205) }
+
+        deleteAndWaitUntilGone(id)
+
+        // The guest went with the failed create; delete has nothing left to destroy.
+        verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4205) }
+    }
+
+    @Test
+    @Order(95)
+    fun aDeleteWhoseDestroyOutlivesTheWaitStillCompletes() {
+        every { proxmoxClient.nextVmid(any()) } returns 4206
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4206"
+        every { proxmoxClient.destroyLxc(any(), any(), 4206) } returns "UPID:pve:destroy-4206"
+        taskOutlivesTheWait("UPID:pve:destroy-4206") {}
+        val id = createMachine("slow-delete")
+        waitForStatus(id, "running")
+
+        deleteAndWaitUntilGone(id)
+
+        assertEquals(
+            listOf("PVE_TASK_SUBMITTED", "PVE_TASK_SUBMITTED", "PVE_TASK_DONE", "DONE"),
+            phases(events(id), "DELETE"),
+        )
+    }
 }

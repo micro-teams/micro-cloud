@@ -324,6 +324,22 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         }
     }
 
+    /**
+     * Whether guest [vmid] exists and passes [verifyGuestIdentity] for this machine. For cleaning
+     * up after a failed create, where an unreadable or foreign guest is one not to touch.
+     */
+    fun ownsGuest(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        vm: Boolean,
+        machineId: Long,
+        hostname: String,
+        ip: String,
+    ): Boolean =
+        runCatching { verifyGuestIdentity(cluster, node, vmid, vm, machineId, hostname, ip) }
+            .isSuccess
+
     /** Next free VM/CT id in the cluster. */
     fun nextVmid(cluster: ProxmoxCluster): Int =
         send(cluster, "GET", "/cluster/nextid", null).asText().toInt()

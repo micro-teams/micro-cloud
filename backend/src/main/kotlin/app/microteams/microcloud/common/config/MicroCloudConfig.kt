@@ -116,6 +116,14 @@ class MicroCloudConfig {
         var vmInitCommand: String? = "sudo python3 - --user '{user}' --ssh-pubkey '{sshPubkey}'"
         /** How long to wait for a Proxmox create/start task to finish. */
         var taskTimeoutSeconds: Long = 180
+        /**
+         * How much longer to keep polling a machine's Proxmox task that is still running after
+         * [taskTimeoutSeconds]. Such a task has not failed, and its work usually lands: on
+         * 2026-10-01 a `pct create` on an overloaded pve119 finished OK 5 s after a 180 s wait gave
+         * up, leaving a running container behind a machine marked error. Only when this second wait
+         * also runs out is the outcome left unknown.
+         */
+        var taskOutcomeTimeoutSeconds: Long = 900
         /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
         var sshReadyTimeoutSeconds: Long = 120
 
