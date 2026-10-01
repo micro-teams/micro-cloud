@@ -1488,7 +1488,8 @@ components:
         the account). LOGIN_POLLED: ccproxy's reported status changed (detail: the raw status).
         LOGIN_READY: the login completed and the machine holds a credential. LOGIN_CANCELLED: a
         previous, never-completed login was cancelled so a fresh one could start. DONE: the action
-        completed (START / SHUTDOWN / STOP / DELETE / AI_SWITCH). FAILED: the action failed
+        completed (START / SHUTDOWN / STOP / DELETE / AI_SWITCH); at WARN under PROVISION, the machine
+        was deleted before it reached running and the delete takes over. FAILED: the action failed
         (detail: the exception).
       enum: [STARTED, PVE_TASK_SUBMITTED, PVE_TASK_DONE, SSH_REACHABLE, INIT_DONE, CCPROXY_REGISTERED, AI_SETUP_FAILED, RUNNING, LOGIN_STARTED, LOGIN_POLLED, LOGIN_READY, LOGIN_CANCELLED, DONE, FAILED]
     MachineEventLevel:

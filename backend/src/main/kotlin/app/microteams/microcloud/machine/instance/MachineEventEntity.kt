@@ -70,7 +70,10 @@ enum class MachineEventPhase {
     LOGIN_READY,
     /** A previous, never-completed login was cancelled so a fresh one could start. */
     LOGIN_CANCELLED,
-    /** The action completed (START / SHUTDOWN / STOP / DELETE / AI_SWITCH). */
+    /**
+     * The action completed (START / SHUTDOWN / STOP / DELETE / AI_SWITCH); at WARN under PROVISION,
+     * the machine was deleted before it reached RUNNING and the delete takes over.
+     */
     DONE,
     /** The action failed; detail is the exception. */
     FAILED,

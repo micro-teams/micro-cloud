@@ -76,6 +76,7 @@ constructor(
     private var customerId: Long = -1
     private var accountId: Long = -1
     private var offeringId: Long = -1
+    private var networkId: Long = -1
     private var machineId: Long = -1
 
     private fun post(url: String, token: String, body: String) =
@@ -214,11 +215,17 @@ constructor(
                         .contentAsString
                 )
                 .getLong("id")
-        post(
-            "/machine/network",
-            adminToken,
-            """{"placementId":$placementId,"startIp":"10.6.0.10","endIp":"10.6.0.30","gateway":"10.6.0.1","prefixLength":24,"bridge":"vmbr0"}""",
-        )
+        networkId =
+            JSONObject(
+                    post(
+                            "/machine/network",
+                            adminToken,
+                            """{"placementId":$placementId,"startIp":"10.6.0.10","endIp":"10.6.0.30","gateway":"10.6.0.1","prefixLength":24,"bridge":"vmbr0"}""",
+                        )
+                        .response
+                        .contentAsString
+                )
+                .getLong("id")
         val typeId =
             JSONObject(
                     post(
@@ -581,5 +588,58 @@ constructor(
             listOf("PVE_TASK_SUBMITTED", "PVE_TASK_SUBMITTED", "PVE_TASK_DONE", "DONE"),
             phases(events(id), "DELETE"),
         )
+    }
+
+    private fun allocatedIps(): Int =
+        getJson("/machine/network/$networkId", adminToken).getInt("allocatedCount")
+
+    @Test
+    @Order(96)
+    fun aMachineDeletedWhileItsCreateRunsLosesItsGuestAndStaysDeleted() {
+        // The delete arrives while pct create is still running; the task then finishes and the
+        // guest exists. The delete must take that guest with it, and the machine must not come
+        // back, so its address is free exactly when no guest holds it.
+        val created = CountDownLatch(1)
+        every { proxmoxClient.nextVmid(any()) } returns 4207
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4207"
+        every { proxmoxClient.waitForTask(any(), "UPID:pve:create-4207", any()) } answers
+            {
+                created.await(10, TimeUnit.SECONDS)
+                Unit
+            }
+        every { proxmoxClient.destroyLxc(any(), any(), 4207) } returns "UPID:pve:destroy-4207"
+        val allocatedBefore = allocatedIps()
+        val id = createMachine("deleted-mid-create")
+        waitForEvent(id, "PROVISION", "PVE_TASK_SUBMITTED")
+
+        mockMvc
+            .perform(delete("/machine/$id").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        // Give the delete up to 2 s to finish before the create does, which it can only do by
+        // not waiting for the provision.
+        for (attempt in 0 until 20) {
+            if (phases(events(id), "DELETE").isNotEmpty()) break
+            Thread.sleep(100)
+        }
+        created.countDown()
+
+        // Both sides have run to the end: the delete recorded its outcome, and the provision
+        // recorded something after its create task finished.
+        waitUntil(10, "machine $id delete and provision both ending") {
+            val items = events(id)
+            val provision = phases(items, "PROVISION")
+            phases(items, "DELETE").any { it == "DONE" || it == "FAILED" } &&
+                provision.indexOf("PVE_TASK_DONE").let { it >= 0 && it < provision.size - 1 }
+        }
+        assertEquals(
+            404,
+            mockMvc
+                .perform(get("/machine/$id").header("Authorization", "Bearer $secret"))
+                .andReturn()
+                .response
+                .status,
+        )
+        verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4207) }
+        assertEquals(allocatedBefore, allocatedIps())
     }
 }

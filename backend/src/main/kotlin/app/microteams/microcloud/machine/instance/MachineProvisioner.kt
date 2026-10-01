@@ -4,7 +4,9 @@
  *               applies the leased IP, waits for it to run, and (optionally) SSHs in to run
  *               init-machine.py (-> RUNNING / ERROR). startCt / stopCt run the matching pct task
  *               (-> RUNNING / STOPPED / ERROR); destroyCt tears the CT down, releases its IP, and
- *               soft-deletes the row. A machine still provisioning (no vmid yet) has no CT to act on.
+ *               soft-deletes the row. provision() and destroyCt() hold the same per-machine lock, so a
+ *               delete that arrives mid-create waits for the provision to commit, then reads the guest
+ *               it created; the provision, finding the machine deleted, stops short of RUNNING.
  *               Every step writes to the machine's event log (MachineEventRecorder): each Proxmox
  *               task with its UPID and duration, the SSH wait, the init output, and every failure.
  *
@@ -87,7 +89,19 @@ class MachineProvisioner(
     @Async
     @Transactional
     fun provision(machineId: Long) {
+        lockMachine(machineId)
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
+        if (machine.status != MachineStatus.PROVISIONING) {
+            // Deleted before provisioning began: nothing was created, and destroyCt frees the IP.
+            events.record(
+                machine,
+                PROVISION,
+                DONE,
+                "provisioning skipped: the machine was deleted before it started",
+                WARN,
+            )
+            return
+        }
         try {
             val placement = placementService.getPlacement(machine.placementId!!)
             val network = networkService.getNetwork(machine.networkId!!)
@@ -152,7 +166,18 @@ class MachineProvisioner(
                     provisionVm(machine, upload, placement, network, cluster, initSuffix)
             }
 
-            machine.status = MachineStatus.RUNNING
+            if (!finishProvisioning(machine, MachineStatus.RUNNING)) {
+                // destroyCt is waiting on lockMachine and destroys the guest once this commits.
+                events.record(
+                    machine,
+                    PROVISION,
+                    DONE,
+                    "provisioning stopped: the machine was deleted while it was being created; " +
+                        "the delete destroys ${kind.wire} ${machine.vmid}",
+                    WARN,
+                )
+                return
+            }
             // Birth-init on ccproxy: register the machine so its Claude is pointed at the engine
             // (unregistered → tunneled through, no account consumed) from birth, ready for a later
             // subscription switch. Best-effort — a failure never affects the machine or its newapi.
@@ -190,9 +215,21 @@ class MachineProvisioner(
                 ERROR,
                 cause = e,
             )
-            machine.status = MachineStatus.ERROR
-            machineRepository.save(machine)
+            finishProvisioning(machine, MachineStatus.ERROR)
         }
+    }
+
+    /**
+     * Write this provision's changes to [machine] (vmid, AI state), then move it from PROVISIONING
+     * to [to]. The status is set by a conditional update rather than on the entity, which was read
+     * minutes ago: a delete may have committed DELETING since, and that must stand. False when it
+     * did.
+     */
+    private fun finishProvisioning(machine: Machine, to: MachineStatus): Boolean {
+        machineRepository.saveAndFlush(machine)
+        if (machineRepository.finishProvisioning(machine.id!!, to) == 0) return false
+        machine.status = to
+        return true
     }
 
     private fun templateName(machine: Machine): String? =
@@ -588,6 +625,8 @@ class MachineProvisioner(
     @Async
     @Transactional
     fun destroyCt(machineId: Long) {
+        // Waits out a provision still running, so the vmid read next is the one it committed.
+        lockMachine(machineId)
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
         try {
             machine.vmid?.let { vmid ->
@@ -713,7 +752,15 @@ class MachineProvisioner(
     private fun lockGuest(cluster: ProxmoxCluster, vmid: Int) {
         // Held through task completion and commit so creation cannot reuse an ID between
         // another worker's ownership check and destructive request.
-        machineRepository.lockGuest("microcloud-guest:${cluster.id}:$vmid")
+        machineRepository.advisoryLock("microcloud-guest:${cluster.id}:$vmid")
+    }
+
+    /**
+     * Held for the whole of provision() and destroyCt(), so a delete never reads the machine while
+     * its create is in flight: provision() saves the vmid only when its transaction commits.
+     */
+    private fun lockMachine(machineId: Long) {
+        machineRepository.advisoryLock("microcloud-machine:$machineId")
     }
 
     private fun verifyGuest(machine: Machine, cluster: ProxmoxCluster, node: String) {
