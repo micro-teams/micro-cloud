@@ -46,6 +46,14 @@ data class ProxmoxInventory(
  */
 class ProxmoxTaskTimeout(message: String) : RuntimeException(message)
 
+/** See [ProxmoxClient.guestOwnership]. */
+enum class GuestOwnership {
+    OURS,
+    ABSENT,
+    FOREIGN,
+    UNKNOWN,
+}
+
 @Component
 class ProxmoxClient(private val objectMapper: ObjectMapper) {
 
@@ -336,9 +344,55 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         machineId: Long,
         hostname: String,
         ip: String,
-    ): Boolean =
-        runCatching { verifyGuestIdentity(cluster, node, vmid, vm, machineId, hostname, ip) }
-            .isSuccess
+    ): Boolean = guestOwnership(cluster, node, vmid, vm, machineId, hostname, ip) == GuestOwnership.OURS
+
+    /**
+     * What guest [vmid] is to machine [machineId], for deciding whether deleting the machine may
+     * destroy it, skip it, or must refuse.
+     *
+     * A pool-scoped token gets 403 for a guest it cannot see, whether that guest is absent or sits
+     * outside the pool, so an unreadable config is settled by asking the cluster whether the id is
+     * taken at all (`/cluster/nextid?vmid=`, open to every user): free means [GuestOwnership.ABSENT].
+     * A guest carrying another machine's marker is [GuestOwnership.FOREIGN]: the id was reused, so
+     * this machine's guest is not there. Everything else that is not provably ours, including a
+     * legacy guest whose hostname or address differ and a taken id we cannot read, is
+     * [GuestOwnership.UNKNOWN], which a caller must treat as "do not touch, do not forget".
+     */
+    fun guestOwnership(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        vm: Boolean,
+        machineId: Long,
+        hostname: String,
+        ip: String,
+    ): GuestOwnership {
+        val kind = if (vm) "qemu" else "lxc"
+        val config =
+            try {
+                send(cluster, "GET", "/nodes/$node/$kind/$vmid/config", null)
+            } catch (e: BadRequestError) {
+                return if (vmidIsFree(cluster, vmid)) GuestOwnership.ABSENT
+                else GuestOwnership.UNKNOWN
+            }
+        val marker = config.path("description").asText("").trim()
+        if (marker.startsWith("microcloud-machine:")) {
+            return if (marker == "microcloud-machine:$machineId") GuestOwnership.OURS
+            else GuestOwnership.FOREIGN
+        }
+        return if (runCatching { verifyGuestIdentity(cluster, node, vmid, vm, machineId, hostname, ip) }.isSuccess)
+            GuestOwnership.OURS
+        else GuestOwnership.UNKNOWN
+    }
+
+    /** Whether no guest anywhere in the cluster holds [vmid]. Proxmox answers 400 when it is taken. */
+    private fun vmidIsFree(cluster: ProxmoxCluster, vmid: Int): Boolean =
+        try {
+            send(cluster, "GET", "/cluster/nextid?vmid=$vmid", null)
+            true
+        } catch (e: BadRequestError) {
+            if (e.message?.contains("already exists") == true) false else throw e
+        }
 
     /** Next free VM/CT id in the cluster. */
     fun nextVmid(cluster: ProxmoxCluster): Int =

@@ -40,6 +40,7 @@ import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.effectiveKind
+import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
@@ -595,8 +596,34 @@ class MachineProvisioner(
                 val cluster = proxmoxService.getCluster(placement.clusterId!!)
                 val node = placement.node!!
                 lockGuest(cluster, vmid)
-                verifyGuest(machine, cluster, node)
-                destroyGuest(machine, DELETE, cluster, node, vmid, placement.effectiveKind)
+                val kind = placement.effectiveKind
+                when (
+                    proxmoxClient.guestOwnership(
+                        cluster,
+                        node,
+                        vmid,
+                        kind == MachineKind.PROXMOX_VM,
+                        machine.id!!,
+                        machine.hostname!!,
+                        machine.ip!!,
+                    )
+                ) {
+                    GuestOwnership.OURS -> destroyGuest(machine, DELETE, cluster, node, vmid, kind)
+                    // This machine's guest is not on the cluster: its create never landed, or the
+                    // id now belongs to a newer machine. Nothing to destroy, and refusing would
+                    // keep the row in ERROR forever while every retry of the delete fails again
+                    // (machines 1817 and 2039, whose ids 123 and 144 went to live machines).
+                    GuestOwnership.ABSENT,
+                    GuestOwnership.FOREIGN ->
+                        events.record(
+                            machine,
+                            DELETE,
+                            DONE,
+                            "guest $vmid is not this machine's (absent or reused); nothing to destroy",
+                        )
+                    GuestOwnership.UNKNOWN ->
+                        error("Guest $vmid cannot be proven absent or this machine's; not touching it")
+                }
             }
             // AI teardown, independent of the machine's current aiMode (a switched machine still
             // holds BOTH a newapi token and a ccproxy registration): release the newapi token and
