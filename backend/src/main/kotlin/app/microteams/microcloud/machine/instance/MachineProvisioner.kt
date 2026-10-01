@@ -622,7 +622,9 @@ class MachineProvisioner(
                             "guest $vmid is not this machine's (absent or reused); nothing to destroy",
                         )
                     GuestOwnership.UNKNOWN ->
-                        error("Guest $vmid cannot be proven absent or this machine's; not touching it")
+                        error(
+                            "Guest $vmid cannot be proven absent or this machine's; not touching it"
+                        )
                 }
             }
             // AI teardown, independent of the machine's current aiMode (a switched machine still

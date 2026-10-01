@@ -127,9 +127,9 @@ class ProxmoxGuestIdentityTest {
 
     @Test
     fun `unreadable guest whose id is free is absent`() {
-        withRoutes(mapOf("/lxc/212/config" to denied, "/cluster/nextid" to (200 to """{"data":"212"}"""))) {
-            client,
-            cluster ->
+        withRoutes(
+            mapOf("/lxc/212/config" to denied, "/cluster/nextid" to (200 to """{"data":"212"}"""))
+        ) { client, cluster ->
             assertEquals(
                 GuestOwnership.ABSENT,
                 client.guestOwnership(cluster, "pve", 212, false, 501, "h", "10.0.0.2"),
@@ -142,7 +142,8 @@ class ProxmoxGuestIdentityTest {
         withRoutes(
             mapOf(
                 "/lxc/212/config" to denied,
-                "/cluster/nextid" to (400 to """{"errors":{"vmid":"VM 212 already exists"},"data":null}"""),
+                "/cluster/nextid" to
+                    (400 to """{"errors":{"vmid":"VM 212 already exists"},"data":null}"""),
             )
         ) { client, cluster ->
             assertEquals(
@@ -154,9 +155,12 @@ class ProxmoxGuestIdentityTest {
 
     @Test
     fun `guest marked for another machine is foreign`() {
-        withRoutes(mapOf("/lxc/212/config" to (200 to """{"data":{"description":"microcloud-machine:502"}}"""))) {
-            client,
-            cluster ->
+        withRoutes(
+            mapOf(
+                "/lxc/212/config" to
+                    (200 to """{"data":{"description":"microcloud-machine:502"}}""")
+            )
+        ) { client, cluster ->
             assertEquals(
                 GuestOwnership.FOREIGN,
                 client.guestOwnership(cluster, "pve", 212, false, 501, "h", "10.0.0.2"),
@@ -167,7 +171,10 @@ class ProxmoxGuestIdentityTest {
     @Test
     fun `legacy guest with other hostname is unknown, not foreign`() {
         withRoutes(
-            mapOf("/lxc/212/config" to (200 to """{"data":{"hostname":"other","net0":"ip=10.0.0.2/24"}}"""))
+            mapOf(
+                "/lxc/212/config" to
+                    (200 to """{"data":{"hostname":"other","net0":"ip=10.0.0.2/24"}}""")
+            )
         ) { client, cluster ->
             assertEquals(
                 GuestOwnership.UNKNOWN,
@@ -178,9 +185,12 @@ class ProxmoxGuestIdentityTest {
 
     @Test
     fun `own marker is ours`() {
-        withRoutes(mapOf("/qemu/212/config" to (200 to """{"data":{"description":"microcloud-machine:501"}}"""))) {
-            client,
-            cluster ->
+        withRoutes(
+            mapOf(
+                "/qemu/212/config" to
+                    (200 to """{"data":{"description":"microcloud-machine:501"}}""")
+            )
+        ) { client, cluster ->
             assertEquals(
                 GuestOwnership.OURS,
                 client.guestOwnership(cluster, "pve", 212, true, 501, "h", "10.0.0.2"),
