@@ -68,21 +68,6 @@ Two things remain manual, both **inside newapi's own UI** (not MicroCloud): conf
 model **channel** (Anthropic, DeepSeek, …, with the provider key), and top up quota if needed.
 MicroCloud only mints/deletes per-machine tokens.
 
-**ccproxy (optional — switch a machine to a real Anthropic subscription).** A machine can be switched
-from the newapi relay to an official subscription login behind [ccproxy](https://github.com/micro-teams/ccproxy)
-(`POST /machine/{id}/ai/ccproxy`, and back with `/ai/newapi`). It is **off unless wired**: leave the
-two `.env` vars below blank and the switch endpoints just return 400. To enable, register MicroCloud
-as a ccproxy tenant and paste its base URL + tenant secret:
-
-| Variable | Purpose |
-| --- | --- |
-| `CCPROXY_BASE_URL` | ccproxy tenant API base **including its path prefix**, e.g. `http://ccproxy-host/ccproxy` |
-| `CCPROXY_TENANT_SECRET` | the opaque tenant secret minted by ccproxy's super-admin — **never commit it** |
-
-Both are passed to the backend as `microcloud.ccproxy.{base-url,tenant-secret}`. The subscription
-OAuth itself is completed by a human on ccproxy's side; MicroCloud triggers it and polls
-`aiMode`/`aiStatus`. See the design docs (`tech/microcloud/06-ai-modes-ccproxy-switch.md`).
-
 ## Upgrades & the schema (`CREATE.sql`)
 
 The backend creates/updates its own tables on boot via Hibernate `ddl-auto=update`. That is fine for
