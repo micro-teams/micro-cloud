@@ -14,10 +14,12 @@ package app.microteams.microcloud.machine.instance
 import app.microteams.microcloud.machine.ai.AiMode
 import app.microteams.microcloud.machine.ai.AiStatus
 import jakarta.persistence.*
+import org.hibernate.annotations.DynamicUpdate
 import org.hibernate.annotations.SQLRestriction
 import org.rucca.cheese.common.persistent.BaseEntity
 import org.rucca.cheese.common.persistent.IdType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
@@ -35,7 +37,11 @@ enum class MachineStatus {
     ERROR,
 }
 
+// Updates write only the columns that changed, so a writer holding a long-lived copy of the row
+// (the provisioner, for the minutes a create takes) does not put back the status that a delete
+// committed in the meantime.
 @Entity
+@DynamicUpdate
 @SQLRestriction("deleted_at IS NULL")
 @Table(
     name = "machine",
@@ -107,11 +113,20 @@ val Machine.effectiveCcproxyAccountId: IdType
     get() = this.ccproxyAccountId ?: this.accountId!!
 
 interface MachineRepository : JpaRepository<Machine, IdType> {
+    /** Take the transaction-scoped advisory lock named [key]; held until commit or rollback. */
     @Query(
-        value = "select 1 from pg_advisory_xact_lock(hashtextextended(:guest, 0))",
+        value = "select 1 from pg_advisory_xact_lock(hashtextextended(:key, 0))",
         nativeQuery = true,
     )
-    fun lockGuest(@Param("guest") guest: String): Int
+    fun advisoryLock(@Param("key") key: String): Int
+
+    /** Move machine [id] from PROVISIONING to [to]; 0 when something else moved it first. */
+    @Modifying
+    @Query(
+        "update Machine m set m.status = :to where m.id = :id and m.status = " +
+            "app.microteams.microcloud.machine.instance.MachineStatus.PROVISIONING"
+    )
+    fun finishProvisioning(@Param("id") id: IdType, @Param("to") to: MachineStatus): Int
 
     @Query(value = "select 1 from pg_advisory_xact_lock(:tenantId)", nativeQuery = true)
     fun lockWarmCreation(@Param("tenantId") tenantId: IdType): Int
