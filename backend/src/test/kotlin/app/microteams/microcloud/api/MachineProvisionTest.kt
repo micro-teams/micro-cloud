@@ -13,6 +13,7 @@
 package app.microteams.microcloud.api
 
 import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.template.MachineTemplate
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
@@ -80,6 +81,9 @@ constructor(
 
     @BeforeAll
     fun setup() {
+        every {
+            proxmoxClient.guestOwnership(any(), any(), any(), any(), any(), any(), any())
+        } returns GuestOwnership.OURS
         adminToken =
             JSONObject(
                     mockMvc
@@ -442,9 +446,7 @@ constructor(
             .andExpect(status().isAccepted)
     }
 
-    @Test
-    @Order(8)
-    fun reusedGuestIsNeverDestroyedAndLeaseRemainsVisible() {
+    private fun firstMachineSettled(): Long {
         val id =
             JSONObject(
                     mockMvc
@@ -456,7 +458,7 @@ constructor(
                 .getJSONArray("items")
                 .getJSONObject(0)
                 .getLong("id")
-        // Let the previous lifecycle action finish before installing the rejection.
+        // Let the previous lifecycle action finish before installing the answer under test.
         repeat(50) {
             val state =
                 JSONObject(
@@ -467,13 +469,20 @@ constructor(
                             .contentAsString
                     )
                     .getString("status")
-            if (state == "stopped" || state == "running") return@repeat
+            if (state == "stopped" || state == "running") return id
             Thread.sleep(100)
         }
+        return id
+    }
+
+    @Test
+    @Order(8)
+    fun unprovableGuestIsNeverDestroyedAndMachineStays() {
+        val id = firstMachineSettled()
         clearMocks(proxmoxClient, answers = false)
         every {
-            proxmoxClient.verifyGuestIdentity(any(), any(), any(), any(), any(), any(), any())
-        } throws IllegalStateException("Guest belongs to a replacement machine")
+            proxmoxClient.guestOwnership(any(), any(), any(), any(), any(), any(), any())
+        } returns GuestOwnership.UNKNOWN
         mockMvc
             .perform(delete("/machine/$id").header("Authorization", "Bearer $secret"))
             .andExpect(status().isAccepted)
@@ -495,6 +504,22 @@ constructor(
         org.junit.jupiter.api.Assertions.assertTrue(failed)
         verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
         verify(exactly = 0) { proxmoxClient.destroyVm(any(), any(), any()) }
-        verify(exactly = 0) { proxmoxClient.stopVm(any(), any(), any()) }
+    }
+
+    @Test
+    @Order(9)
+    fun machineWhoseIdWentToAnotherGuestIsDeletedWithoutTouchingIt() {
+        // The ERROR machine left by order 8; its id now holds another machine's guest.
+        val id = firstMachineSettled()
+        clearMocks(proxmoxClient, answers = false)
+        every {
+            proxmoxClient.guestOwnership(any(), any(), any(), any(), any(), any(), any())
+        } returns GuestOwnership.FOREIGN
+        mockMvc
+            .perform(delete("/machine/$id").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitUntilGone(id)
+        verify(exactly = 0) { proxmoxClient.destroyLxc(any(), any(), any()) }
+        verify(exactly = 0) { proxmoxClient.destroyVm(any(), any(), any()) }
     }
 }
