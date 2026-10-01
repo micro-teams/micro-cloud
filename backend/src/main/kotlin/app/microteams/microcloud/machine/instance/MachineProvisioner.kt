@@ -204,6 +204,10 @@ class MachineProvisioner(
      * [ProxmoxClient.waitForTask] with the UPID in the message, so the caller's FAILED event
      * carries it — the `qm start` lock timeout of 2026-09-03 was only visible in Proxmox's own task
      * index until then.
+     *
+     * A task still running when the wait runs out has not failed, so it is polled for
+     * [MicroCloudConfig.Provisioning.taskOutcomeTimeoutSeconds] more, with a WARN event saying so.
+     * Only if that runs out too does [ProxmoxTaskTimeout] reach the caller, as an unknown outcome.
      */
     private fun awaitTask(
         machine: Machine,
@@ -214,7 +218,21 @@ class MachineProvisioner(
     ) {
         events.record(machine, action, PVE_TASK_SUBMITTED, "$what submitted", detail = "upid=$upid")
         val started = System.nanoTime()
-        proxmoxClient.waitForTask(cluster, upid, timeout())
+        try {
+            proxmoxClient.waitForTask(cluster, upid, timeout())
+        } catch (e: ProxmoxTaskTimeout) {
+            val more = config.provisioning.taskOutcomeTimeoutSeconds
+            events.record(
+                machine,
+                action,
+                PVE_TASK_SUBMITTED,
+                "$what still running after ${timeout()} s; its outcome is unknown, polling up to " +
+                    "$more s more",
+                WARN,
+                detail = "upid=$upid",
+            )
+            proxmoxClient.waitForTask(cluster, upid, more)
+        }
         val ms = (System.nanoTime() - started) / 1_000_000
         events.record(
             machine,
@@ -333,7 +351,7 @@ class MachineProvisioner(
         }
 
         val upid = proxmoxClient.createLxc(cluster, node, params)
-        awaitCreate(machine, vmid) {
+        awaitCreate(machine, cluster, node, vmid) {
             awaitTask(
                 machine,
                 PROVISION,
@@ -386,7 +404,7 @@ class MachineProvisioner(
                     put("full", "1")
                 },
             )
-        awaitCreate(machine, vmid) {
+        awaitCreate(machine, cluster, node, vmid) {
             awaitTask(
                 machine,
                 PROVISION,
@@ -578,36 +596,7 @@ class MachineProvisioner(
                 val node = placement.node!!
                 lockGuest(cluster, vmid)
                 verifyGuest(machine, cluster, node)
-                when (placement.effectiveKind) {
-                    // pct destroy --purge --force tears down a running CT in one shot.
-                    MachineKind.PROXMOX_LXC ->
-                        awaitTask(
-                            machine,
-                            DELETE,
-                            "pct destroy CT$vmid on $node",
-                            cluster,
-                            proxmoxClient.destroyLxc(cluster, node, vmid),
-                        )
-                    // qm destroy REFUSES a running VM ("VM N is running - destroy failed"), unlike
-                    // pct destroy, so a running VM is qm-stopped first. Two tasks, each recorded.
-                    MachineKind.PROXMOX_VM -> {
-                        if (proxmoxClient.vmStatus(cluster, node, vmid) != "stopped")
-                            awaitTask(
-                                machine,
-                                DELETE,
-                                "qm stop VM$vmid on $node",
-                                cluster,
-                                proxmoxClient.stopVm(cluster, node, vmid),
-                            )
-                        awaitTask(
-                            machine,
-                            DELETE,
-                            "qm destroy VM$vmid on $node",
-                            cluster,
-                            proxmoxClient.destroyVm(cluster, node, vmid),
-                        )
-                    }
-                }
+                destroyGuest(machine, DELETE, cluster, node, vmid, placement.effectiveKind)
             }
             // AI teardown, independent of the machine's current aiMode (a switched machine still
             // holds BOTH a newapi token and a ccproxy registration): release the newapi token and
@@ -634,13 +623,20 @@ class MachineProvisioner(
     private fun timeout() = config.provisioning.taskTimeoutSeconds
 
     /**
-     * Wait on the task creating guest [vmid], owning the vmid from submission. A create that
-     * outlives the wait still lands its guest; had the vmid been recorded only on success, delete
-     * would skip the destroy and free the IP under a running guest, and the next machine leased
-     * that IP (machine 1951's CT253 on 2026-09-29). A task that stopped with an error leaves no
-     * guest, so the vmid is dropped and delete does not fail on a guest that was never there.
+     * Wait on the task creating guest [vmid], owning the vmid from submission. A create whose
+     * outcome stays unknown may still land its guest; had the vmid been recorded only on success,
+     * delete would skip the destroy and free the IP under a running guest, and the next machine
+     * leased that IP (machine 1951's CT253 on 2026-09-29). A task that stopped with an error
+     * normally leaves no guest, but if one with this machine's identity is there anyway it is
+     * destroyed; then the vmid is dropped, so delete does not fail on a guest that is gone.
      */
-    private fun awaitCreate(machine: Machine, vmid: Int, wait: () -> Unit) {
+    private fun awaitCreate(
+        machine: Machine,
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        wait: () -> Unit,
+    ) {
         machine.vmid = vmid
         machineRepository.save(machine)
         try {
@@ -648,8 +644,69 @@ class MachineProvisioner(
         } catch (e: ProxmoxTaskTimeout) {
             throw e
         } catch (e: Exception) {
+            val kind = kindOf(machine)
+            if (
+                proxmoxClient.ownsGuest(
+                    cluster,
+                    node,
+                    vmid,
+                    kind == MachineKind.PROXMOX_VM,
+                    machine.id!!,
+                    machine.hostname!!,
+                    machine.ip!!,
+                )
+            ) {
+                try {
+                    destroyGuest(machine, PROVISION, cluster, node, vmid, kind)
+                } catch (cleanup: Exception) {
+                    // The guest is still there: keep the vmid so delete destroys it later.
+                    e.addSuppressed(cleanup)
+                    throw e
+                }
+            }
             machine.vmid = null
             throw e
+        }
+    }
+
+    /** Tear down guest [vmid] on [node], recording each Proxmox task under [action]. */
+    private fun destroyGuest(
+        machine: Machine,
+        action: MachineEventAction,
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        kind: MachineKind,
+    ) {
+        when (kind) {
+            // pct destroy --purge --force tears down a running CT in one shot.
+            MachineKind.PROXMOX_LXC ->
+                awaitTask(
+                    machine,
+                    action,
+                    "pct destroy CT$vmid on $node",
+                    cluster,
+                    proxmoxClient.destroyLxc(cluster, node, vmid),
+                )
+            // qm destroy REFUSES a running VM ("VM N is running - destroy failed"), unlike pct
+            // destroy, so a running VM is qm-stopped first. Two tasks, each recorded.
+            MachineKind.PROXMOX_VM -> {
+                if (proxmoxClient.vmStatus(cluster, node, vmid) != "stopped")
+                    awaitTask(
+                        machine,
+                        action,
+                        "qm stop VM$vmid on $node",
+                        cluster,
+                        proxmoxClient.stopVm(cluster, node, vmid),
+                    )
+                awaitTask(
+                    machine,
+                    action,
+                    "qm destroy VM$vmid on $node",
+                    cluster,
+                    proxmoxClient.destroyVm(cluster, node, vmid),
+                )
+            }
         }
     }
 
