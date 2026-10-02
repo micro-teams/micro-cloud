@@ -46,6 +46,17 @@ data class ProxmoxInventory(
  */
 class ProxmoxTaskTimeout(message: String) : RuntimeException(message)
 
+/**
+ * Proxmox refused to act on a guest because something else holds it: its config carries a lock (`CT
+ * is locked (fstrim)` while a maintenance `pct fstrim` runs, `VM is locked (backup)`), or its
+ * config file stayed flocked past the task's own wait (`can't lock file ... - got timeout`). The
+ * guest was not touched, so the same request can be sent again once the holder lets go. Raised
+ * whether the refusal came back from the request itself or as the exit status of its task.
+ */
+class ProxmoxGuestLocked(message: String) : RuntimeException(message)
+
+private val GUEST_LOCKED = Regex("""\b(CT|VM) is locked \(|can't lock file '[^']*' - got timeout""")
+
 /** See [ProxmoxClient.guestOwnership]. */
 enum class GuestOwnership {
     OURS,
@@ -458,6 +469,8 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
                     startingLxc == null ||
                         exit != "unable to get PID for CT $startingLxc (not running?)"
                 ) {
+                    if (GUEST_LOCKED.containsMatchIn(exit))
+                        throw ProxmoxGuestLocked("Proxmox task $upid failed: $exit")
                     throw BadRequestError("Proxmox task $upid failed: $exit")
                 }
                 if (monitorFailure == null) {
@@ -516,9 +529,10 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
                 throw BadRequestError("Proxmox request failed: ${e.message}")
             }
         if (response.statusCode() !in 200..299) {
-            throw BadRequestError(
-                "Proxmox returned ${response.statusCode()} for $path: ${response.body()}"
-            )
+            val message = "Proxmox returned ${response.statusCode()} for $path: ${response.body()}"
+            // Some requests check the guest's lock before forking their task (pct destroy does).
+            if (GUEST_LOCKED.containsMatchIn(response.body())) throw ProxmoxGuestLocked(message)
+            throw BadRequestError(message)
         }
         return objectMapper.readTree(response.body()).path("data")
     }

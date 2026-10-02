@@ -124,6 +124,13 @@ class MicroCloudConfig {
          * also runs out is the outcome left unknown.
          */
         var taskOutcomeTimeoutSeconds: Long = 900
+        /**
+         * How long to keep resubmitting a task on an existing guest that Proxmox refuses because
+         * the guest is locked, before failing it. pve119's maintainer runs `pct fstrim` over every
+         * container about every 2 h, about 4 min per sweep, and a container starting while its
+         * fstrim holds the lock fails with `CT is locked (fstrim)`; 10 min outlasts a sweep.
+         */
+        var lockRetrySeconds: Long = 600
         /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
         var sshReadyTimeoutSeconds: Long = 120
 

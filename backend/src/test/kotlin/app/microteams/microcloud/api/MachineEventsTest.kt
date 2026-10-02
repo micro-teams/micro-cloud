@@ -15,11 +15,14 @@
 
 package app.microteams.microcloud.api
 
+import app.microteams.microcloud.common.config.MicroCloudConfig
 import app.microteams.microcloud.machine.MachineKind
 import app.microteams.microcloud.machine.ai.CcproxyClient
 import app.microteams.microcloud.machine.ai.CcproxyLoginRequest
 import app.microteams.microcloud.machine.ai.CcproxyMachine
+import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
+import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.template.MachineTemplate
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
@@ -65,6 +68,7 @@ constructor(
     private val mockMvc: MockMvc,
     private val templateRepository: MachineTemplateRepository,
     private val uploadRepository: TemplateUploadRepository,
+    private val config: MicroCloudConfig,
     @Value("\${microcloud.superadmin-password}") private val superadminPassword: String,
 ) {
     @MockkBean(relaxed = true) private lateinit var proxmoxClient: ProxmoxClient
@@ -304,7 +308,14 @@ constructor(
 
         val items = events(machineId)
         assertEquals(
-            listOf("STARTED", "PVE_TASK_SUBMITTED", "PVE_TASK_DONE", "RUNNING"),
+            listOf(
+                "STARTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "RUNNING",
+            ),
             phases(items, "PROVISION"),
         )
         for (i in 0 until items.length()) {
@@ -429,7 +440,14 @@ constructor(
         // The machine is gone from every machine read, its history is not.
         val items = events(machineId)
         assertEquals(
-            listOf("STARTED", "PVE_TASK_SUBMITTED", "PVE_TASK_DONE", "RUNNING"),
+            listOf(
+                "STARTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "RUNNING",
+            ),
             phases(items, "PROVISION"),
         )
         assertEquals(listOf("PVE_TASK_SUBMITTED", "PVE_TASK_DONE", "DONE"), phases(items, "DELETE"))
@@ -524,6 +542,8 @@ constructor(
             listOf(
                 "STARTED",
                 "PVE_TASK_SUBMITTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
                 "PVE_TASK_SUBMITTED",
                 "PVE_TASK_DONE",
                 "RUNNING",
@@ -641,5 +661,104 @@ constructor(
         )
         verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4207) }
         assertEquals(allocatedBefore, allocatedIps())
+    }
+
+    /** Every wait on [upid] ends with Proxmox's fstrim lock refusal until [locked] waits have. */
+    private fun lockedByFstrim(upid: String, locked: Int = Int.MAX_VALUE) {
+        val waits = AtomicInteger()
+        every { proxmoxClient.waitForTask(any(), upid, any()) } answers
+            {
+                if (waits.incrementAndGet() <= locked)
+                    throw ProxmoxGuestLocked("Proxmox task $upid failed: CT is locked (fstrim)")
+            }
+    }
+
+    private fun <T> withLockRetrySeconds(seconds: Long, block: () -> T): T {
+        val before = config.provisioning.lockRetrySeconds
+        config.provisioning.lockRetrySeconds = seconds
+        try {
+            return block()
+        } finally {
+            config.provisioning.lockRetrySeconds = before
+        }
+    }
+
+    @Test
+    @Order(97)
+    fun aStartRefusedByAnFstrimLockIsRetriedAndTheMachineRuns() {
+        // pve119 on 2026-10-01: CT170's start ran into the maintainer's pct fstrim sweep.
+        every { proxmoxClient.nextVmid(any()) } returns 4208
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4208"
+        every { proxmoxClient.startLxc(any(), any(), 4208) } returns "UPID:pve:start-4208"
+        lockedByFstrim("UPID:pve:start-4208", locked = 1)
+        val id = createMachine("fstrim-start")
+        waitFor(id, 15, "status running") { it.getString("status") == "running" }
+
+        verify(exactly = 2) { proxmoxClient.startLxc(any(), any(), 4208) }
+        val refused =
+            (0 until events(id).length())
+                .map { events(id).getJSONObject(it) }
+                .single { it.getString("level") == "WARN" }
+        assertEquals("PVE_TASK_SUBMITTED", refused.getString("phase"))
+        assertTrue(refused.getString("message").contains("locked"))
+        assertTrue(refused.getString("detail").contains("CT is locked (fstrim)"))
+    }
+
+    @Test
+    @Order(98)
+    fun aStartStillLockedAfterTheBoundFailsAndDeleteRemovesTheGuest() {
+        every { proxmoxClient.nextVmid(any()) } returns 4209
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4209"
+        every { proxmoxClient.startLxc(any(), any(), 4209) } returns "UPID:pve:start-4209"
+        every { proxmoxClient.destroyLxc(any(), any(), 4209) } returns "UPID:pve:destroy-4209"
+        lockedByFstrim("UPID:pve:start-4209")
+        val id =
+            withLockRetrySeconds(3) {
+                createMachine("fstrim-forever").also {
+                    waitFor(it, 15, "status error") { m -> m.getString("status") == "error" }
+                }
+            }
+
+        verify(atLeast = 2) { proxmoxClient.startLxc(any(), any(), 4209) }
+        val failed = events(id).let { it.getJSONObject(it.length() - 1) }
+        assertEquals("FAILED", failed.getString("phase"))
+        assertTrue(failed.getString("message").contains("stayed locked"))
+        // The container was created and is ours; deleting the machine takes it with it.
+        every {
+            proxmoxClient.guestOwnership(any(), any(), 4209, false, any(), any(), any())
+        } returns GuestOwnership.OURS
+        deleteAndWaitUntilGone(id)
+        verify(exactly = 1) { proxmoxClient.destroyLxc(any(), any(), 4209) }
+    }
+
+    @Test
+    @Order(99)
+    fun aLifecycleStartRefusedByAnFstrimLockIsRetried() {
+        every { proxmoxClient.nextVmid(any()) } returns 4210
+        every { proxmoxClient.createLxc(any(), any(), any()) } returns "UPID:pve:create-4210"
+        val id = createMachine("fstrim-restart")
+        waitForStatus(id, "running")
+        mockMvc
+            .perform(post("/machine/$id/stop").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitForStatus(id, "stopped")
+
+        every { proxmoxClient.startLxc(any(), any(), 4210) } returns "UPID:pve:start-4210"
+        lockedByFstrim("UPID:pve:start-4210", locked = 1)
+        mockMvc
+            .perform(post("/machine/$id/start").header("Authorization", "Bearer $secret"))
+            .andExpect(status().isAccepted)
+        waitFor(id, 15, "status running") { it.getString("status") == "running" }
+
+        assertEquals(
+            listOf(
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_SUBMITTED",
+                "PVE_TASK_DONE",
+                "DONE",
+            ),
+            phases(events(id), "START"),
+        )
     }
 }
