@@ -7,6 +7,8 @@
  *               soft-deletes the row. provision() and destroyCt() hold the same per-machine lock, so a
  *               delete that arrives mid-create waits for the provision to commit, then reads the guest
  *               it created; the provision, finding the machine deleted, stops short of RUNNING.
+ *               A task on an existing guest that Proxmox refuses because the guest is locked (a
+ *               maintenance fstrim) is resubmitted for a bounded time.
  *               Every step writes to the machine's event log (MachineEventRecorder): each Proxmox
  *               task with its UPID and duration, the SSH wait, the init output, and every failure.
  *
@@ -46,6 +48,7 @@ import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
+import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
@@ -282,6 +285,52 @@ class MachineProvisioner(
     }
 
     /**
+     * [awaitTask] for a task on a guest that already exists, whose request [submit] sends and
+     * returns the UPID of. While Proxmox refuses it because the guest is locked
+     * ([ProxmoxGuestLocked]: the guest was not touched) the request is sent again, backing off from
+     * 2 s to 30 s, for up to [MicroCloudConfig.Provisioning.lockRetrySeconds]; each refusal is a
+     * WARN event. A create is never resubmitted this way: its lock would be another create's.
+     */
+    private fun awaitGuestTask(
+        machine: Machine,
+        action: MachineEventAction,
+        what: String,
+        cluster: ProxmoxCluster,
+        submit: () -> String,
+    ) {
+        val bound = config.provisioning.lockRetrySeconds
+        val deadline = System.nanoTime() + bound * 1_000_000_000
+        var backoff = 2L
+        var attempt = 1
+        while (true) {
+            try {
+                awaitTask(machine, action, what, cluster, submit())
+                return
+            } catch (e: ProxmoxGuestLocked) {
+                val left = (deadline - System.nanoTime()) / 1_000_000_000
+                if (left <= 0)
+                    throw ProxmoxGuestLocked(
+                        "$what: the guest stayed locked through $attempt attempts over $bound s: " +
+                            e.message
+                    )
+                val wait = minOf(backoff, left)
+                events.record(
+                    machine,
+                    action,
+                    PVE_TASK_SUBMITTED,
+                    "$what refused, the guest is locked; resubmitting in $wait s " +
+                        "(attempt ${attempt + 1}, up to $bound s in all)",
+                    WARN,
+                    detail = e.message,
+                )
+                Thread.sleep(wait * 1000)
+                backoff = minOf(backoff * 2, 30)
+                attempt++
+            }
+        }
+    }
+
+    /**
      * `pct start` / `qm start` returning does NOT mean the guest is reachable — it's still booting
      * (sshd not up, network not ready). Wait until TCP :22 accepts a connection, and record how
      * long that took.
@@ -385,7 +434,9 @@ class MachineProvisioner(
             put("pool", placement.pool!!)
             put("password", randomPassword())
             operatorSsh.publicKey()?.let { put("ssh-public-keys", it) }
-            put("start", "1")
+            // No start=1: Proxmox runs that start as a separate vzstart task the create task does
+            // not wait for, so a start refused while pve119's fstrim sweep held the lock went
+            // unseen until SSH never came up. The start below is awaited and retried.
         }
 
         val upid = proxmoxClient.createLxc(cluster, node, params)
@@ -393,10 +444,13 @@ class MachineProvisioner(
             awaitTask(
                 machine,
                 PROVISION,
-                "pct create CT$vmid on $node (from $ostemplate, started)",
+                "pct create CT$vmid on $node (from $ostemplate)",
                 cluster,
                 upid,
             )
+        }
+        awaitGuestTask(machine, PROVISION, "pct start CT$vmid on $node", cluster) {
+            proxmoxClient.startLxc(cluster, node, vmid)
         }
 
         runInit(machine, network.gateway!!, aiInitSuffix)
@@ -474,20 +528,17 @@ class MachineProvisioner(
         // issued before it finishes fails with "can't lock file ... got timeout" whenever the
         // storage is slow enough for the resize to outlast qm start's 10 s lock wait (three
         // times on pve119 on 2026-09-03). Wait for it like every other task here.
-        awaitTask(
+        awaitGuestTask(
             machine,
             PROVISION,
             "qm resize VM$vmid scsi0 to ${machine.diskGb}G",
             cluster,
-            proxmoxClient.resizeVmDisk(cluster, node, vmid, "scsi0", "${machine.diskGb}G"),
-        )
-        awaitTask(
-            machine,
-            PROVISION,
-            "qm start VM$vmid",
-            cluster,
-            proxmoxClient.startVm(cluster, node, vmid),
-        )
+        ) {
+            proxmoxClient.resizeVmDisk(cluster, node, vmid, "scsi0", "${machine.diskGb}G")
+        }
+        awaitGuestTask(machine, PROVISION, "qm start VM$vmid", cluster) {
+            proxmoxClient.startVm(cluster, node, vmid)
+        }
         awaitSsh(machine)
         runVmInit(machine, aiInitSuffix)
     }
@@ -540,9 +591,11 @@ class MachineProvisioner(
             when (kindOf(machine)) {
                 MachineKind.PROXMOX_LXC ->
                     "shutdown CT$vmid (retain disks) on $node" to
-                        proxmoxClient.shutdownLxc(cluster, node, vmid)
+                        {
+                            proxmoxClient.shutdownLxc(cluster, node, vmid)
+                        }
                 MachineKind.PROXMOX_VM ->
-                    "hibernate VM$vmid on $node" to proxmoxClient.suspendVm(cluster, node, vmid)
+                    "hibernate VM$vmid on $node" to { proxmoxClient.suspendVm(cluster, node, vmid) }
             }
         }
 
@@ -557,9 +610,11 @@ class MachineProvisioner(
             when (kindOf(machine)) {
                 MachineKind.PROXMOX_LXC ->
                     "start CT$vmid (existing disks) on $node" to
-                        proxmoxClient.startLxc(cluster, node, vmid)
+                        {
+                            proxmoxClient.startLxc(cluster, node, vmid)
+                        }
                 MachineKind.PROXMOX_VM ->
-                    "resume VM$vmid on $node" to proxmoxClient.resumeVm(cluster, node, vmid)
+                    "resume VM$vmid on $node" to { proxmoxClient.resumeVm(cluster, node, vmid) }
             }
         }
 
@@ -572,9 +627,9 @@ class MachineProvisioner(
             machine.vmid?.let {
                 when (kindOf(machine)) {
                     MachineKind.PROXMOX_LXC ->
-                        "pct start CT$it on $node" to proxmoxClient.startLxc(cluster, node, it)
+                        "pct start CT$it on $node" to { proxmoxClient.startLxc(cluster, node, it) }
                     MachineKind.PROXMOX_VM ->
-                        "qm start VM$it on $node" to proxmoxClient.startVm(cluster, node, it)
+                        "qm start VM$it on $node" to { proxmoxClient.startVm(cluster, node, it) }
                 }
             }
         }
@@ -593,9 +648,14 @@ class MachineProvisioner(
                 when (kindOf(machine)) {
                     MachineKind.PROXMOX_LXC ->
                         "pct shutdown CT$it on $node" to
-                            proxmoxClient.shutdownLxc(cluster, node, it)
+                            {
+                                proxmoxClient.shutdownLxc(cluster, node, it)
+                            }
                     MachineKind.PROXMOX_VM ->
-                        "qm shutdown VM$it on $node" to proxmoxClient.shutdownVm(cluster, node, it)
+                        "qm shutdown VM$it on $node" to
+                            {
+                                proxmoxClient.shutdownVm(cluster, node, it)
+                            }
                 }
             }
         }
@@ -611,9 +671,9 @@ class MachineProvisioner(
             machine.vmid?.let {
                 when (kindOf(machine)) {
                     MachineKind.PROXMOX_LXC ->
-                        "pct stop CT$it on $node" to proxmoxClient.stopLxc(cluster, node, it)
+                        "pct stop CT$it on $node" to { proxmoxClient.stopLxc(cluster, node, it) }
                     MachineKind.PROXMOX_VM ->
-                        "qm stop VM$it on $node" to proxmoxClient.stopVm(cluster, node, it)
+                        "qm stop VM$it on $node" to { proxmoxClient.stopVm(cluster, node, it) }
                 }
             }
         }
@@ -749,31 +809,19 @@ class MachineProvisioner(
         when (kind) {
             // pct destroy --purge --force tears down a running CT in one shot.
             MachineKind.PROXMOX_LXC ->
-                awaitTask(
-                    machine,
-                    action,
-                    "pct destroy CT$vmid on $node",
-                    cluster,
-                    proxmoxClient.destroyLxc(cluster, node, vmid),
-                )
+                awaitGuestTask(machine, action, "pct destroy CT$vmid on $node", cluster) {
+                    proxmoxClient.destroyLxc(cluster, node, vmid)
+                }
             // qm destroy REFUSES a running VM ("VM N is running - destroy failed"), unlike pct
             // destroy, so a running VM is qm-stopped first. Two tasks, each recorded.
             MachineKind.PROXMOX_VM -> {
                 if (proxmoxClient.vmStatus(cluster, node, vmid) != "stopped")
-                    awaitTask(
-                        machine,
-                        action,
-                        "qm stop VM$vmid on $node",
-                        cluster,
-                        proxmoxClient.stopVm(cluster, node, vmid),
-                    )
-                awaitTask(
-                    machine,
-                    action,
-                    "qm destroy VM$vmid on $node",
-                    cluster,
-                    proxmoxClient.destroyVm(cluster, node, vmid),
-                )
+                    awaitGuestTask(machine, action, "qm stop VM$vmid on $node", cluster) {
+                        proxmoxClient.stopVm(cluster, node, vmid)
+                    }
+                awaitGuestTask(machine, action, "qm destroy VM$vmid on $node", cluster) {
+                    proxmoxClient.destroyVm(cluster, node, vmid)
+                }
             }
         }
     }
@@ -805,15 +853,15 @@ class MachineProvisioner(
     }
 
     /**
-     * Run one Proxmox task on the machine's guest — [submit] returns what it submitted and the
-     * UPID, or null when there is no guest yet — then land the given terminal status (or ERROR),
-     * recording the task and the outcome under [action].
+     * Run one Proxmox task on the machine's guest — [submit] returns what it is and the request
+     * that sends it (see [awaitGuestTask]), or null when there is no guest yet — then land the
+     * given terminal status (or ERROR), recording the task and the outcome under [action].
      */
     private fun runTask(
         machineId: Long,
         action: MachineEventAction,
         terminal: MachineStatus,
-        submit: (Machine, ProxmoxCluster, String) -> Pair<String, String>?,
+        submit: (Machine, ProxmoxCluster, String) -> Pair<String, () -> String>?,
     ) {
         val machine = machineRepository.findById(machineId).orElse(null) ?: return
         try {
@@ -823,8 +871,8 @@ class MachineProvisioner(
                 lockGuest(cluster, it)
                 verifyGuest(machine, cluster, node)
             }
-            submit(machine, cluster, node)?.let { (what, upid) ->
-                awaitTask(machine, action, what, cluster, upid)
+            submit(machine, cluster, node)?.let { (what, request) ->
+                awaitGuestTask(machine, action, what, cluster, request)
             }
             machine.status = terminal
             events.record(machine, action, DONE, "machine is ${terminal.name.lowercase()}")

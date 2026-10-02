@@ -47,7 +47,8 @@ enum class MachineEventPhase {
     STARTED,
     /**
      * A Proxmox task was submitted; detail is its UPID. Recorded again at WARN when the task is
-     * still running after the normal wait and polling continues.
+     * still running after the normal wait and polling continues, and when Proxmox refused it
+     * because the guest is locked and it is about to be submitted again.
      */
     PVE_TASK_SUBMITTED,
     /** That Proxmox task finished OK; detail is the UPID and the duration. */
