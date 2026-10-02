@@ -207,6 +207,11 @@ jobs:
         run: |
           bash gen-env.sh
           docker compose up -d --wait --wait-timeout 360
+      # The healthcheck gates on readiness; operators read the aggregate, which must be UP too (a
+      # client for a service the stack does not run, e.g. Redis, turns it DOWN for good).
+      - name: Aggregate health is UP
+        working-directory: microcloud-deploy
+        run: docker compose exec -T backend curl -fsS http://localhost:8080/actuator/health
       - name: Cluster status
         if: always()
         working-directory: microcloud-deploy
