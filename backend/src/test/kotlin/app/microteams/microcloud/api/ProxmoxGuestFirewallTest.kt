@@ -45,7 +45,9 @@ class ProxmoxGuestFirewallTest {
         return when {
             '/' in spec -> {
                 val (net, bits) = spec.split('/')
-                val mask = if (bits.toInt() == 0) 0L else (0xFFFFFFFFL shl (32 - bits.toInt())) and 0xFFFFFFFFL
+                val mask =
+                    if (bits.toInt() == 0) 0L
+                    else (0xFFFFFFFFL shl (32 - bits.toInt())) and 0xFFFFFFFFL
                 ip and mask == ipv4(net) and mask
             }
             '-' in spec -> spec.split('-').let { (lo, hi) -> ip in ipv4(lo)..ipv4(hi) }
@@ -84,7 +86,10 @@ class ProxmoxGuestFirewallTest {
         assertEquals("DROP", verdict("out", "169.254.169.254", "tcp", 80))
         assertEquals("DROP", verdict("out", "100.64.1.1", "tcp", 22))
         assertEquals("DROP", verdict("out", "10.20.0.9", "tcp", 22))
-        assertEquals(listOf("fe80::/10", "fc00::/7"), rules.mapNotNull { it.dest?.takeIf { ':' in it } })
+        assertEquals(
+            listOf("fe80::/10", "fc00::/7"),
+            rules.mapNotNull { it.dest?.takeIf { ':' in it } },
+        )
     }
 
     @Test
@@ -128,18 +133,22 @@ class ProxmoxGuestFirewallTest {
         fun handle(exchange: HttpExchange) {
             val path = exchange.requestURI.path.removePrefix("/api2/json/nodes/pve/qemu/300")
             val form =
-                exchange.requestBody.readAllBytes().toString(StandardCharsets.UTF_8).split('&').filter {
-                    it.isNotBlank()
-                }.associate {
-                    val (k, v) = it.split('=', limit = 2)
-                    k to URLDecoder.decode(v, StandardCharsets.UTF_8)
-                }
+                exchange.requestBody
+                    .readAllBytes()
+                    .toString(StandardCharsets.UTF_8)
+                    .split('&')
+                    .filter { it.isNotBlank() }
+                    .associate {
+                        val (k, v) = it.split('=', limit = 2)
+                        k to URLDecoder.decode(v, StandardCharsets.UTF_8)
+                    }
             val data: Any? =
                 when ("${exchange.requestMethod} $path") {
                     "GET /config" -> mapOf("net0" to net0)
                     "PUT /config" -> null.also { net0 = form.getValue("net0") }
                     "POST /firewall/ipset" -> null
-                    "POST /firewall/ipset/ipfilter-net0" -> null.also { ipset += form.getValue("cidr") }
+                    "POST /firewall/ipset/ipfilter-net0" ->
+                        null.also { ipset += form.getValue("cidr") }
                     "POST /firewall/rules" -> {
                         val rule = form.toMutableMap()
                         if (!honoursEnable || "enable" !in rule) rule["enable"] = "0"
@@ -147,9 +156,13 @@ class ProxmoxGuestFirewallTest {
                         null
                     }
                     "GET /firewall/rules" ->
-                        rules.mapIndexed { i, r -> r + ("pos" to "$i") }.map { r ->
-                            r.mapValues { (k, v) -> if (k == "enable" || k == "pos") v.toInt() else v }
-                        }
+                        rules
+                            .mapIndexed { i, r -> r + ("pos" to "$i") }
+                            .map { r ->
+                                r.mapValues { (k, v) ->
+                                    if (k == "enable" || k == "pos") v.toInt() else v
+                                }
+                            }
                     "PUT /firewall/options" -> null.also { options = form }
                     "GET /firewall/options" -> options.mapValues { (_, v) -> v.toIntOrNull() ?: v }
                     else -> error("unexpected ${exchange.requestMethod} $path")
@@ -207,7 +220,12 @@ class ProxmoxGuestFirewallTest {
         )
         assertEquals(List(rules.size) { "1" }, vm.rules.map { it["enable"] })
         assertEquals(
-            mapOf("enable" to "1", "ipfilter" to "1", "policy_in" to "ACCEPT", "policy_out" to "ACCEPT"),
+            mapOf(
+                "enable" to "1",
+                "ipfilter" to "1",
+                "policy_in" to "ACCEPT",
+                "policy_out" to "ACCEPT",
+            ),
             vm.options,
         )
     }

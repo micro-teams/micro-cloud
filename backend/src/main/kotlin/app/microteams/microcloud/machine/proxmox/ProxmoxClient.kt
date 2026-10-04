@@ -247,10 +247,10 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
     /**
      * Put VM [vmid]'s `net0` behind the Proxmox firewall with exactly [rules] (see
      * [guestIsolationRules]), before the VM first starts. The ipfilter set holds only [ip], so the
-     * guest can neither send from nor answer ARP for any other address on the shared segment.
-     * Reads the rules back and throws unless they are exactly [rules], all enabled: Proxmox inserts
-     * each new rule at the top and leaves it disabled unless told otherwise, so a rule list that
-     * reaches it in the wrong shape still saves without an error.
+     * guest can neither send from nor answer ARP for any other address on the shared segment. Reads
+     * the rules back and throws unless they are exactly [rules], all enabled: Proxmox inserts each
+     * new rule at the top and leaves it disabled unless told otherwise, so a rule list that reaches
+     * it in the wrong shape still saves without an error.
      */
     fun isolateVm(
         cluster: ProxmoxCluster,
@@ -263,8 +263,9 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
         val net0 = send(cluster, "GET", "$base/config", null).path("net0").asText("")
         check(net0.isNotBlank()) { "VM $vmid has no net0 to isolate" }
         val firewalled =
-            (net0.split(',').filterNot { it.startsWith("firewall=") } + "firewall=1")
-                .joinToString(",")
+            (net0.split(',').filterNot { it.startsWith("firewall=") } + "firewall=1").joinToString(
+                ","
+            )
         send(cluster, "PUT", "$base/config", mapOf("net0" to firewalled))
         send(cluster, "POST", "$base/firewall/ipset", mapOf("name" to "ipfilter-net0"))
         send(cluster, "POST", "$base/firewall/ipset/ipfilter-net0", mapOf("cidr" to ip))

@@ -225,7 +225,9 @@ constructor(
             proxmoxClient.isolateVm(any(), eq("pve"), any(), eq("10.8.0.10"), capture(isolation))
             proxmoxClient.startVm(any(), eq("pve"), any())
         }
-        assertTrue(GuestFirewallRule("in", "DROP", source = "10.8.0.10-10.8.0.20") in isolation.captured)
+        assertTrue(
+            GuestFirewallRule("in", "DROP", source = "10.8.0.10-10.8.0.20") in isolation.captured
+        )
         assertTrue(GuestFirewallRule("out", "DROP", dest = "10.0.0.0/8") in isolation.captured)
 
         verifyOrder {

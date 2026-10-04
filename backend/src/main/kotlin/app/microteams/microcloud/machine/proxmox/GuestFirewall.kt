@@ -52,8 +52,8 @@ private val PRIVATE_DESTINATIONS =
  *
  * Port 53 is open to every destination because the resolver a guest is given is on a private
  * address the backend cannot read (it needs Sys.Audit on the node). ccproxy's engine is not let
- * through: MicroCloud does not know its address, so a deployment that wires ccproxy in again has
- * to add it here.
+ * through: MicroCloud does not know its address, so a deployment that wires ccproxy in again has to
+ * add it here.
  */
 fun guestIsolationRules(
     guestRanges: List<String>,

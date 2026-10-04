@@ -156,9 +156,10 @@ class NetworkService(
      * networks included since their machines may still run: the guests one guest must not reach.
      */
     fun guestRanges(): List<String> =
-        networkRepository.findAll().sortedBy { it.id }.map {
-            if (it.startIp == it.endIp) it.startIp!! else "${it.startIp}-${it.endIp}"
-        }
+        networkRepository
+            .findAll()
+            .sortedBy { it.id }
+            .map { if (it.startIp == it.endIp) it.startIp!! else "${it.startIp}-${it.endIp}" }
 
     /** Release every address held by a machine (on destroy). */
     fun releaseIpsFor(machineId: IdType) {
