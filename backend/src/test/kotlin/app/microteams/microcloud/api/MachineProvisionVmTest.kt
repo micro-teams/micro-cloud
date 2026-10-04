@@ -3,7 +3,7 @@
  *               are identical to the LXC path (offering / customer / account / IP lease); what
  *               differs is the provisioner branch. With the template's kind = VM and a baked
  *               template vmid recorded on the upload, creating a machine drives the Proxmox VM path
- *               (qm clone → cloud-init config → start), NOT the LXC path (pct create). Proxmox and
+ *               (qm clone → cloud-init config → firewall → start), NOT the LXC path (pct create). Proxmox and
  *               the operator SSH are mocked, so the async worker runs without a real cluster.
  *
  *  Author(s):
@@ -14,6 +14,7 @@
 package app.microteams.microcloud.api
 
 import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.proxmox.GuestFirewallRule
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.template.MachineTemplate
@@ -23,9 +24,11 @@ import app.microteams.microcloud.machine.template.TemplateUploadRepository
 import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.every
+import io.mockk.slot
 import io.mockk.verify
 import io.mockk.verifyOrder
 import org.json.JSONObject
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.springframework.beans.factory.annotation.Autowired
@@ -214,6 +217,19 @@ constructor(
         // the resize task was awaited — a start fired straight after the resize call failed with
         // "can't lock file ... got timeout" on a slow thin pool (pve119, VM 147, 2026-09-03).
         verify(timeout = 5000) { proxmoxClient.startVm(any(), eq("pve"), any()) }
+
+        // The VM is put behind its firewall before it first boots, holding its own leased address,
+        // and kept out of this network's range like every other guest's.
+        val isolation = slot<List<GuestFirewallRule>>()
+        verifyOrder {
+            proxmoxClient.isolateVm(any(), eq("pve"), any(), eq("10.8.0.10"), capture(isolation))
+            proxmoxClient.startVm(any(), eq("pve"), any())
+        }
+        assertTrue(
+            GuestFirewallRule("in", "DROP", source = "10.8.0.10-10.8.0.20") in isolation.captured
+        )
+        assertTrue(GuestFirewallRule("out", "DROP", dest = "10.0.0.0/8") in isolation.captured)
+
         verifyOrder {
             proxmoxClient.resizeVmDisk(any(), eq("pve"), any(), eq("scsi0"), any())
             proxmoxClient.waitForTask(any(), eq("UPID:pve:resize-task"), any())

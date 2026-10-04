@@ -151,6 +151,16 @@ class NetworkService(
         throw BadRequestError("network $networkId has no free address")
     }
 
+    /**
+     * Every address range machines are given, as `first-last` (a lone address as itself), disabled
+     * networks included since their machines may still run: the guests one guest must not reach.
+     */
+    fun guestRanges(): List<String> =
+        networkRepository
+            .findAll()
+            .sortedBy { it.id }
+            .map { if (it.startIp == it.endIp) it.startIp!! else "${it.startIp}-${it.endIp}" }
+
     /** Release every address held by a machine (on destroy). */
     fun releaseIpsFor(machineId: IdType) {
         ipAllocationRepository.deleteAll(ipAllocationRepository.findByMachineId(machineId))

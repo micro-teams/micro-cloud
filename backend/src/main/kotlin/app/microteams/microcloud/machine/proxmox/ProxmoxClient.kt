@@ -244,6 +244,75 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
             )
             .asText()
 
+    /**
+     * Put VM [vmid]'s `net0` behind the Proxmox firewall with exactly [rules] (see
+     * [guestIsolationRules]), before the VM first starts. The ipfilter set holds only [ip], so the
+     * guest can neither send from nor answer ARP for any other address on the shared segment. Reads
+     * the rules back and throws unless they are exactly [rules], all enabled: Proxmox inserts each
+     * new rule at the top and leaves it disabled unless told otherwise, so a rule list that reaches
+     * it in the wrong shape still saves without an error.
+     */
+    fun isolateVm(
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        ip: String,
+        rules: List<GuestFirewallRule>,
+    ) {
+        val base = "/nodes/$node/qemu/$vmid"
+        val net0 = send(cluster, "GET", "$base/config", null).path("net0").asText("")
+        check(net0.isNotBlank()) { "VM $vmid has no net0 to isolate" }
+        val firewalled =
+            (net0.split(',').filterNot { it.startsWith("firewall=") } + "firewall=1").joinToString(
+                ","
+            )
+        send(cluster, "PUT", "$base/config", mapOf("net0" to firewalled))
+        send(cluster, "POST", "$base/firewall/ipset", mapOf("name" to "ipfilter-net0"))
+        send(cluster, "POST", "$base/firewall/ipset/ipfilter-net0", mapOf("cidr" to ip))
+        for (rule in rules.asReversed()) {
+            val form = buildMap {
+                put("type", rule.type)
+                put("action", rule.action)
+                put("enable", "1")
+                rule.source?.let { put("source", it) }
+                rule.dest?.let { put("dest", it) }
+                rule.proto?.let { put("proto", it) }
+                rule.dport?.let { put("dport", it) }
+            }
+            send(cluster, "POST", "$base/firewall/rules", form)
+        }
+        send(
+            cluster,
+            "PUT",
+            "$base/firewall/options",
+            mapOf(
+                "enable" to "1",
+                "ipfilter" to "1",
+                "policy_in" to "ACCEPT",
+                "policy_out" to "ACCEPT",
+            ),
+        )
+        val applied =
+            get(cluster, "$base/firewall/rules").map {
+                fun field(name: String) = it.path(name).asText("").ifBlank { null }
+                GuestFirewallRule(
+                    type = it.path("type").asText(),
+                    action = it.path("action").asText(),
+                    source = field("source"),
+                    dest = field("dest"),
+                    proto = field("proto"),
+                    dport = field("dport"),
+                ) to (it.path("enable").asInt(0) == 1)
+            }
+        check(applied == rules.map { it to true }) {
+            "VM $vmid firewall rules read back as $applied, expected $rules"
+        }
+        val options = send(cluster, "GET", "$base/firewall/options", null)
+        check(options.path("enable").asInt(0) == 1 && options.path("ipfilter").asInt(0) == 1) {
+            "VM $vmid firewall options read back as $options"
+        }
+    }
+
     /** Convert a stopped VM into a template. Returns the task UPID. */
     fun templateVm(cluster: ProxmoxCluster, node: String, vmid: Int): String =
         send(cluster, "POST", "/nodes/$node/qemu/$vmid/template", emptyMap()).asText()

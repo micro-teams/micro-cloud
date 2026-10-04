@@ -18,6 +18,7 @@ secret() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -
 # machine (outside the compose network) uses to reach newapi through the gateway. Auto-detected;
 # override NEWAPI_MACHINE_BASE_URL below if the guess is wrong (e.g. behind NAT / a public domain).
 NGINX_PORT=80
+RELAY_PORT=8090
 HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')
 [ -n "$HOST_IP" ] || HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -n "$HOST_IP" ] || HOST_IP=127.0.0.1
@@ -39,8 +40,11 @@ NGINX_HTTP_PORT=$NGINX_PORT
 # use and mints per-machine relay tokens — no other newapi wiring needed. NEWAPI_MACHINE_BASE_URL is
 # what a machine's Claude Code points ANTHROPIC_BASE_URL at (newapi reached through the gateway,
 # since machines are off the compose network); auto-guessed from this host's IP — override if wrong.
+# It is on a port of its own, NEWAPI_MACHINE_PORT, serving nothing but the relay: that host:port is
+# what a network-isolated machine is let through to, so it must not be the gateway's.
 NEWAPI_ROOT_PASSWORD=$(secret 24)
-NEWAPI_MACHINE_BASE_URL=http://$HOST_IP:$NGINX_PORT/newapi
+NEWAPI_MACHINE_PORT=$RELAY_PORT
+NEWAPI_MACHINE_BASE_URL=http://$HOST_IP:$RELAY_PORT/newapi
 
 # ccproxy (OPTIONAL — the super-admin-triggered switch to a real subscription login behind the
 # ccproxy MITM). ccproxy is an external service; MicroCloud is one of its tenants. Leave both blank
