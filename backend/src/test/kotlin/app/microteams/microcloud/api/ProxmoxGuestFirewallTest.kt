@@ -218,7 +218,9 @@ class ProxmoxGuestFirewallTest {
     @Test
     fun `isolating a VM leaves its firewall holding exactly the policy`() {
         val vm = FakeVm()
-        withVm(vm) { client, cluster -> client.isolateGuest(cluster, "pve", 300, true, "10.20.0.3", rules) }
+        withVm(vm) { client, cluster ->
+            client.isolateGuest(cluster, "pve", 300, true, "10.20.0.3", rules)
+        }
 
         assertEquals("virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1", vm.net0)
         assertEquals(listOf("10.20.0.3"), vm.ipset)
@@ -252,7 +254,8 @@ class ProxmoxGuestFirewallTest {
         val ct =
             FakeVm(
                 kind = "lxc",
-                net0 = "name=eth0,bridge=vmbr0,gw=10.20.0.1,hwaddr=BC:24:11:00:00:02,ip=10.20.0.4/24,type=veth",
+                net0 =
+                    "name=eth0,bridge=vmbr0,gw=10.20.0.1,hwaddr=BC:24:11:00:00:02,ip=10.20.0.4/24,type=veth",
             )
         withVm(ct) { client, cluster ->
             client.isolateGuest(cluster, "pve", 300, false, "10.20.0.4", rules)

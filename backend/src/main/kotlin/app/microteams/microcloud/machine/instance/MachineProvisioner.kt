@@ -561,7 +561,9 @@ class MachineProvisioner(
     ) {
         val reachable =
             listOfNotNull(relayEndpoint(config.newapi.machineBaseUrl)) +
-                config.provisioning.guestReachable.filter { it.isNotBlank() }.map(::reachableEndpoint)
+                config.provisioning.guestReachable
+                    .filter { it.isNotBlank() }
+                    .map(::reachableEndpoint)
         proxmoxClient.isolateGuest(
             cluster,
             node,
