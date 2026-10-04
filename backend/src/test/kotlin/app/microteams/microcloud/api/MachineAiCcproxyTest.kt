@@ -48,7 +48,8 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
         [
             "microcloud.provisioning.init-command=",
             "microcloud.newapi.root-password=test-root-pw",
-            "microcloud.newapi.machine-base-url=http://host:8080/newapi",
+            // An address: provisioning resolves the relay host for the machine's firewall rule.
+            "microcloud.newapi.machine-base-url=http://10.0.0.5:8080/newapi",
         ]
 )
 class MachineAiCcproxyTest

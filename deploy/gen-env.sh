@@ -46,6 +46,10 @@ NEWAPI_ROOT_PASSWORD=$(secret 24)
 NEWAPI_MACHINE_PORT=$RELAY_PORT
 NEWAPI_MACHINE_BASE_URL=http://$HOST_IP:$RELAY_PORT/newapi
 
+# Private host:port endpoints (comma-separated) that machines may still reach through their network
+# isolation, beyond DNS and the newapi relay: a service on this network machines are meant to use.
+MICROCLOUD_GUEST_REACHABLE=
+
 # ccproxy (OPTIONAL — the super-admin-triggered switch to a real subscription login behind the
 # ccproxy MITM). ccproxy is an external service; MicroCloud is one of its tenants. Leave both blank
 # to disable the switch (every machine just stays on newapi). The tenant secret is minted by

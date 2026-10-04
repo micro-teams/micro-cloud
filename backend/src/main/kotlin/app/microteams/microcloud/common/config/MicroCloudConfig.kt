@@ -131,6 +131,13 @@ class MicroCloudConfig {
          * fstrim holds the lock fails with `CT is locked (fstrim)`; 10 min outlasts a sweep.
          */
         var lockRetrySeconds: Long = 600
+        /**
+         * Private `host:port` endpoints an isolated machine may still open TCP connections to,
+         * beyond DNS and the newapi relay: a service on the deployment's network that machines are
+         * meant to use. Every other private address is dropped by the machine's Proxmox firewall
+         * (see guestIsolationRules). Empty by default.
+         */
+        var guestReachable: List<String> = emptyList()
         /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
         var sshReadyTimeoutSeconds: Long = 120
 

@@ -222,7 +222,7 @@ constructor(
         // and kept out of this network's range like every other guest's.
         val isolation = slot<List<GuestFirewallRule>>()
         verifyOrder {
-            proxmoxClient.isolateVm(any(), eq("pve"), any(), eq("10.8.0.10"), capture(isolation))
+            proxmoxClient.isolateGuest(any(), eq("pve"), any(), eq(true), eq("10.8.0.10"), capture(isolation))
             proxmoxClient.startVm(any(), eq("pve"), any())
         }
         assertTrue(

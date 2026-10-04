@@ -15,6 +15,7 @@ import app.microteams.microcloud.machine.proxmox.GuestFirewallRule
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.guestIsolationRules
+import app.microteams.microcloud.machine.proxmox.reachableEndpoint
 import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
@@ -31,7 +32,8 @@ import org.junit.jupiter.api.Test
 class ProxmoxGuestFirewallTest {
     private val guests = listOf("10.20.0.1-10.20.0.254", "10.21.0.7")
     private val relay = "10.1.0.5" to 8090
-    private val rules = guestIsolationRules(guests, relay)
+    private val gateway = "10.1.0.9" to 443
+    private val rules = guestIsolationRules(guests, listOf(relay, gateway))
 
     // ---- the policy ----
 
@@ -67,8 +69,10 @@ class ProxmoxGuestFirewallTest {
             ?.action ?: "ACCEPT"
 
     @Test
-    fun `a guest reaches DNS, the relay and the internet`() {
+    fun `a guest reaches DNS, the listed private endpoints and the internet`() {
         assertEquals("ACCEPT", verdict("out", "10.3.3.3", "udp", 53))
+        assertEquals("ACCEPT", verdict("out", "10.1.0.9", "tcp", 443))
+        assertEquals("DROP", verdict("out", "10.1.0.9", "tcp", 22))
         assertEquals("ACCEPT", verdict("out", "10.3.3.3", "tcp", 53))
         assertEquals("ACCEPT", verdict("out", "10.1.0.5", "tcp", 8090))
         assertEquals("ACCEPT", verdict("out", "140.82.112.3", "tcp", 443))
@@ -102,9 +106,19 @@ class ProxmoxGuestFirewallTest {
     }
 
     @Test
-    fun `without newapi no private port is open`() {
-        val bare = guestIsolationRules(guests, null)
-        assertEquals(rules.filterNot { it.dest == "10.1.0.5" }, bare)
+    fun `with nothing listed no private port is open`() {
+        val bare = guestIsolationRules(guests, emptyList())
+        assertEquals(rules.filterNot { it.dest == "10.1.0.5" || it.dest == "10.1.0.9" }, bare)
+    }
+
+    @Test
+    fun `a listed endpoint is host and port`() {
+        assertEquals("10.1.0.9" to 443, reachableEndpoint("10.1.0.9:443"))
+        assertEquals(
+            InetAddress.getByName("localhost").hostAddress to 8443,
+            reachableEndpoint("localhost:8443"),
+        )
+        assertThrows(IllegalArgumentException::class.java) { reachableEndpoint("10.1.0.9") }
     }
 
     @Test
@@ -123,15 +137,18 @@ class ProxmoxGuestFirewallTest {
     // ---- the client against a Proxmox-shaped endpoint ----
 
     /** Holds one VM's config and firewall the way Proxmox does. */
-    private class FakeVm(val honoursEnable: Boolean = true) {
-        var net0 = "virtio=BC:24:11:00:00:01,bridge=vmbr0"
+    private class FakeVm(
+        val honoursEnable: Boolean = true,
+        val kind: String = "qemu",
+        var net0: String = "virtio=BC:24:11:00:00:01,bridge=vmbr0",
+    ) {
         val ipset = mutableListOf<String>()
         val rules = mutableListOf<Map<String, String>>()
         var options = mapOf<String, String>()
         val mapper = ObjectMapper()
 
         fun handle(exchange: HttpExchange) {
-            val path = exchange.requestURI.path.removePrefix("/api2/json/nodes/pve/qemu/300")
+            val path = exchange.requestURI.path.removePrefix("/api2/json/nodes/pve/$kind/300")
             val form =
                 exchange.requestBody
                     .readAllBytes()
@@ -201,7 +218,7 @@ class ProxmoxGuestFirewallTest {
     @Test
     fun `isolating a VM leaves its firewall holding exactly the policy`() {
         val vm = FakeVm()
-        withVm(vm) { client, cluster -> client.isolateVm(cluster, "pve", 300, "10.20.0.3", rules) }
+        withVm(vm) { client, cluster -> client.isolateGuest(cluster, "pve", 300, true, "10.20.0.3", rules) }
 
         assertEquals("virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1", vm.net0)
         assertEquals(listOf("10.20.0.3"), vm.ipset)
@@ -231,10 +248,30 @@ class ProxmoxGuestFirewallTest {
     }
 
     @Test
+    fun `isolating a container works the same way on its own path`() {
+        val ct =
+            FakeVm(
+                kind = "lxc",
+                net0 = "name=eth0,bridge=vmbr0,gw=10.20.0.1,hwaddr=BC:24:11:00:00:02,ip=10.20.0.4/24,type=veth",
+            )
+        withVm(ct) { client, cluster ->
+            client.isolateGuest(cluster, "pve", 300, false, "10.20.0.4", rules)
+        }
+
+        assertEquals(
+            "name=eth0,bridge=vmbr0,gw=10.20.0.1,hwaddr=BC:24:11:00:00:02,ip=10.20.0.4/24,type=veth,firewall=1",
+            ct.net0,
+        )
+        assertEquals(listOf("10.20.0.4"), ct.ipset)
+        assertEquals(rules.size, ct.rules.size)
+        assertEquals("1", ct.options["enable"])
+    }
+
+    @Test
     fun `rules that land disabled fail the isolation`() {
         withVm(FakeVm(honoursEnable = false)) { client, cluster ->
             assertThrows(IllegalStateException::class.java) {
-                client.isolateVm(cluster, "pve", 300, "10.20.0.3", rules)
+                client.isolateGuest(cluster, "pve", 300, true, "10.20.0.3", rules)
             }
         }
     }

@@ -24,6 +24,7 @@ import com.ninjasquad.springmockk.MockkBean
 import io.mockk.clearMocks
 import io.mockk.every
 import io.mockk.verify
+import io.mockk.verifyOrder
 import org.json.JSONObject
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation
@@ -280,6 +281,14 @@ constructor(
                 .andExpect(jsonPath("$.customerId").value(customerId))
                 .andReturn()
         machineId = JSONObject(res.response.contentAsString).getLong("id")
+
+        // The container is put behind its firewall, holding its own leased address, before its
+        // first start.
+        verify(timeout = 5000) { proxmoxClient.startLxc(any(), any(), any()) }
+        verifyOrder {
+            proxmoxClient.isolateGuest(any(), any(), any(), eq(false), eq("10.9.0.10"), any())
+            proxmoxClient.startLxc(any(), any(), any())
+        }
 
         // The network now reports one address allocated.
         mockMvc
