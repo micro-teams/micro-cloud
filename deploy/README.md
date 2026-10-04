@@ -49,6 +49,7 @@ consumed — nothing is silently ignored.
 | `JWT_SECRET` | backend (`application.jwt-secret`) | signs/verifies session tokens |
 | `SUPERADMIN_PASSWORD` | backend (`microcloud.superadmin-password`) | the super-admin login password |
 | `NGINX_HTTP_PORT` | nginx `ports` | host port the gateway listens on (default 80) |
+| `NEWAPI_MACHINE_PORT` | nginx `ports` | host port of the newapi relay alone, which machines reach (default 8090) |
 
 **Provisioning needs no environment variables.** `gen-env.sh` generates the operator SSH keypair at
 `./keys/operator`, and the backend defaults to it (`/keys/operator`, mounted read-only at `/keys`)
@@ -59,7 +60,7 @@ blank to skip SSH init — but you don't need to.)
 
 **AI (Claude Code model access) needs no manual wiring.** Every machine defaults to **newapi** — a
 per-machine relay token, fully automatic. `gen-env.sh` generates `NEWAPI_ROOT_PASSWORD` and derives
-`NEWAPI_MACHINE_BASE_URL` (`http://<this-host-ip>:<port>/newapi`, reached through the gateway since
+`NEWAPI_MACHINE_BASE_URL` (`http://<this-host-ip>:<NEWAPI_MACHINE_PORT>/newapi`, reached through nginx since
 machines are outside the compose network); the backend initializes newapi with that root password on
 first use, logs in, and mints tokens — no access tokens or URLs to configure. If
 `NEWAPI_MACHINE_BASE_URL` was guessed wrong (NAT / public domain), edit it in `.env`.
@@ -138,6 +139,23 @@ No manual step. `ddl-auto=update` just adds the new **nullable** `machine.ccprox
 - Machine templates now preinstall `git`, `tmux`, and `jujutsu (jj)` on both LXC and VM offerings;
   re-bake/rebuild templates to pick these up on existing deployments.
 
+### Upgrading to guest network isolation
+
+New **VM** machines are created behind their Proxmox firewall (see "Guest network isolation" below),
+which lets them reach one port of this host: the one in `NEWAPI_MACHINE_BASE_URL`. That URL used to
+point at the gateway port, which also serves the backend API and the console, so move it to the
+relay's own port before starting the new release: in `.env`, set
+
+```
+NEWAPI_MACHINE_BASE_URL=http://<this-host-ip>:8090/newapi
+```
+
+(or add `NEWAPI_MACHINE_PORT=<port>` and use that port, if 8090 is taken). Existing machines keep the
+URL they were born with; the gateway still serves `/newapi/` for them. Proxmox needs nothing new as
+long as the datacenter firewall is enabled (Datacenter → Firewall → Options → Firewall: Yes); with it
+off, a guest's own firewall is not applied at all. The cluster token needs `VM.Config.Network` on the
+pool, which the role that creates machines already has.
+
 ### Upgrading to machine suspend/resume
 
 Before starting the new backend, back up the database and apply `migrations/machine-suspend.sql`
@@ -172,6 +190,23 @@ New machines are initialized automatically: `gen-env.sh` generates the operator 
 private key it uses to SSH in and run `init-machine.py`. That creates the tenant's non-root login
 user, authorizes its key, grants it sudo + docker, and then **hardens** the machine (disables root
 SSH, enables the firewall) — so no operator backdoor is left. No configuration required.
+
+### Guest network isolation
+
+Machines share a network segment with whatever else the deployment runs there, and a tenant has root
+on its machine, so no firewall inside the guest can limit what it reaches. A VM is therefore created with
+`firewall=1` on its NIC and a Proxmox firewall of its own, set before its first boot and enforced on
+the host:
+
+- out: DNS (port 53) and the newapi relay's host:port are allowed; every private, link-local and CGNAT
+  destination (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, fe80::/10, fc00::/7) is dropped;
+  everything else, the internet, is allowed.
+- in: every network's address range (the other machines) and IPv6 link-local are dropped; the rest is
+  allowed, so the backend, the tenant and its services still reach the machine over SSH.
+- `ipfilter`: the VM may only send from, and answer ARP for, its own leased address.
+
+Proxmox drops the firewall with the VM when the VM is destroyed. LXC machines are not isolated yet.
+Anything private a machine needs beyond the relay, such as ccproxy's engine, is blocked.
 
 ## Domain-independent
 

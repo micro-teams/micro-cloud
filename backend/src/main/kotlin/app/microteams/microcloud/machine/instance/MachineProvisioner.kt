@@ -2,7 +2,8 @@
  *  Description: The Proxmox side of a machine's lifecycle — every method is @Async and lands a
  *               terminal status. provision() creates an LXC from the template on the placement,
  *               applies the leased IP, waits for it to run, and (optionally) SSHs in to run
- *               init-machine.py (-> RUNNING / ERROR). startCt / stopCt run the matching pct task
+ *               init-machine.py (-> RUNNING / ERROR); a VM is put behind its Proxmox firewall
+ *               (GuestFirewall) before it first boots. startCt / stopCt run the matching pct task
  *               (-> RUNNING / STOPPED / ERROR); destroyCt tears the CT down, releases its IP, and
  *               soft-deletes the row. provision() and destroyCt() hold the same per-machine lock, so a
  *               delete that arrives mid-create waits for the provision to commit, then reads the guest
@@ -51,6 +52,8 @@ import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
+import app.microteams.microcloud.machine.proxmox.guestIsolationRules
+import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
 import app.microteams.microcloud.machine.template.TemplateUploadRepository
@@ -523,6 +526,19 @@ class MachineProvisioner(
                     put("sshkeys", proxmoxClient.sshkeysParam(cloudInitKeys))
                 put("ipconfig0", "ip=${machine.ip}/${network.prefixLength},gw=${network.gateway}")
             },
+        )
+        // Before the first boot, so the guest is never on the network unisolated. VMs only for now:
+        // an LXC guest hosts the tenant's own connector, and its traffic has yet to be shown to
+        // need nothing private before LXC gets the same.
+        proxmoxClient.isolateVm(
+            cluster,
+            node,
+            vmid,
+            machine.ip!!,
+            guestIsolationRules(
+                networkService.guestRanges(),
+                relayEndpoint(config.newapi.machineBaseUrl),
+            ),
         )
         // The resize is a task that holds the VM's config lock while the volume grows; a start
         // issued before it finishes fails with "can't lock file ... got timeout" whenever the
