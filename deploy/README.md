@@ -50,6 +50,7 @@ consumed — nothing is silently ignored.
 | `SUPERADMIN_PASSWORD` | backend (`microcloud.superadmin-password`) | the super-admin login password |
 | `NGINX_HTTP_PORT` | nginx `ports` | host port the gateway listens on (default 80) |
 | `NEWAPI_MACHINE_PORT` | nginx `ports` | host port of the newapi relay alone, which machines reach (default 8090) |
+| `MICROCLOUD_GUEST_REACHABLE` | backend (`microcloud.provisioning.guest-reachable`) | private `host:port` endpoints machines may reach through their isolation, comma-separated (default none) |
 
 **Provisioning needs no environment variables.** `gen-env.sh` generates the operator SSH keypair at
 `./keys/operator`, and the backend defaults to it (`/keys/operator`, mounted read-only at `/keys`)
@@ -141,8 +142,8 @@ No manual step. `ddl-auto=update` just adds the new **nullable** `machine.ccprox
 
 ### Upgrading to guest network isolation
 
-New **VM** machines are created behind their Proxmox firewall (see "Guest network isolation" below),
-which lets them reach one port of this host: the one in `NEWAPI_MACHINE_BASE_URL`. That URL used to
+New machines are created behind their Proxmox firewall (see "Guest network isolation" below), which
+lets them reach one port of this host: the one in `NEWAPI_MACHINE_BASE_URL`. That URL used to
 point at the gateway port, which also serves the backend API and the console, so move it to the
 relay's own port before starting the new release: in `.env`, set
 
@@ -154,7 +155,8 @@ NEWAPI_MACHINE_BASE_URL=http://<this-host-ip>:8090/newapi
 URL they were born with; the gateway still serves `/newapi/` for them. Proxmox needs nothing new as
 long as the datacenter firewall is enabled (Datacenter → Firewall → Options → Firewall: Yes); with it
 off, a guest's own firewall is not applied at all. The cluster token needs `VM.Config.Network` on the
-pool, which the role that creates machines already has.
+pool, which the role that creates machines already has. If machines use a private service of the
+platform that created them, list it in `MICROCLOUD_GUEST_REACHABLE` before they are cut off from it.
 
 ### Upgrading to machine suspend/resume
 
@@ -194,19 +196,22 @@ SSH, enables the firewall) — so no operator backdoor is left. No configuration
 ### Guest network isolation
 
 Machines share a network segment with whatever else the deployment runs there, and a tenant has root
-on its machine, so no firewall inside the guest can limit what it reaches. A VM is therefore created with
-`firewall=1` on its NIC and a Proxmox firewall of its own, set before its first boot and enforced on
-the host:
+on its machine, so no firewall inside the guest can limit what it reaches. Every new machine, VM or
+LXC, is therefore created with `firewall=1` on its NIC and a Proxmox firewall of its own, set before
+its first boot and enforced on the host:
 
-- out: DNS (port 53) and the newapi relay's host:port are allowed; every private, link-local and CGNAT
-  destination (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10, fe80::/10, fc00::/7) is dropped;
-  everything else, the internet, is allowed.
+- out: DNS (port 53), the newapi relay's host:port and each `MICROCLOUD_GUEST_REACHABLE` endpoint are
+  allowed; every other private, link-local and CGNAT destination (10/8, 172.16/12, 192.168/16,
+  169.254/16, 100.64/10, fe80::/10, fc00::/7) is dropped; everything else, the internet, is allowed.
 - in: every network's address range (the other machines) and IPv6 link-local are dropped; the rest is
   allowed, so the backend, the tenant and its services still reach the machine over SSH.
-- `ipfilter`: the VM may only send from, and answer ARP for, its own leased address.
+- `ipfilter`: the machine may only send from, and answer ARP for, its own leased address.
 
-Proxmox drops the firewall with the VM when the VM is destroyed. LXC machines are not isolated yet.
-Anything private a machine needs beyond the relay, such as ccproxy's engine, is blocked.
+Traffic a machine NATs out of its own interface (Docker containers, network namespaces it creates)
+leaves with the machine's address and gets the same treatment. Proxmox drops the firewall with the
+guest when the guest is destroyed. Machines created before this release keep running unisolated.
+Anything private a machine needs, such as ccproxy's engine or a service of the calling platform, has
+to be listed in `MICROCLOUD_GUEST_REACHABLE`.
 
 ## Domain-independent
 

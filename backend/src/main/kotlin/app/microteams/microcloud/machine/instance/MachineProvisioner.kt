@@ -2,8 +2,8 @@
  *  Description: The Proxmox side of a machine's lifecycle — every method is @Async and lands a
  *               terminal status. provision() creates an LXC from the template on the placement,
  *               applies the leased IP, waits for it to run, and (optionally) SSHs in to run
- *               init-machine.py (-> RUNNING / ERROR); a VM is put behind its Proxmox firewall
- *               (GuestFirewall) before it first boots. startCt / stopCt run the matching pct task
+ *               init-machine.py (-> RUNNING / ERROR); every new guest is put behind its Proxmox
+ *               firewall (GuestFirewall) before it first boots. startCt / stopCt run the matching pct task
  *               (-> RUNNING / STOPPED / ERROR); destroyCt tears the CT down, releases its IP, and
  *               soft-deletes the row. provision() and destroyCt() hold the same per-machine lock, so a
  *               delete that arrives mid-create waits for the provision to commit, then reads the guest
@@ -53,6 +53,7 @@ import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.proxmox.guestIsolationRules
+import app.microteams.microcloud.machine.proxmox.reachableEndpoint
 import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
@@ -452,6 +453,8 @@ class MachineProvisioner(
                 upid,
             )
         }
+        // Before the first start, so the container is never on the network unisolated.
+        isolate(machine, cluster, node, vmid, vm = false)
         awaitGuestTask(machine, PROVISION, "pct start CT$vmid on $node", cluster) {
             proxmoxClient.startLxc(cluster, node, vmid)
         }
@@ -527,19 +530,8 @@ class MachineProvisioner(
                 put("ipconfig0", "ip=${machine.ip}/${network.prefixLength},gw=${network.gateway}")
             },
         )
-        // Before the first boot, so the guest is never on the network unisolated. VMs only for now:
-        // an LXC guest hosts the tenant's own connector, and its traffic has yet to be shown to
-        // need nothing private before LXC gets the same.
-        proxmoxClient.isolateVm(
-            cluster,
-            node,
-            vmid,
-            machine.ip!!,
-            guestIsolationRules(
-                networkService.guestRanges(),
-                relayEndpoint(config.newapi.machineBaseUrl),
-            ),
-        )
+        // Before the first boot, so the guest is never on the network unisolated.
+        isolate(machine, cluster, node, vmid, vm = true)
         // The resize is a task that holds the VM's config lock while the volume grows; a start
         // issued before it finishes fails with "can't lock file ... got timeout" whenever the
         // storage is slow enough for the resize to outlast qm start's 10 s lock wait (three
@@ -557,6 +549,29 @@ class MachineProvisioner(
         }
         awaitSsh(machine)
         runVmInit(machine, aiInitSuffix)
+    }
+
+    /** Put the new guest behind its Proxmox firewall (see guestIsolationRules). */
+    private fun isolate(
+        machine: Machine,
+        cluster: ProxmoxCluster,
+        node: String,
+        vmid: Int,
+        vm: Boolean,
+    ) {
+        val reachable =
+            listOfNotNull(relayEndpoint(config.newapi.machineBaseUrl)) +
+                config.provisioning.guestReachable
+                    .filter { it.isNotBlank() }
+                    .map(::reachableEndpoint)
+        proxmoxClient.isolateGuest(
+            cluster,
+            node,
+            vmid,
+            vm,
+            machine.ip!!,
+            guestIsolationRules(networkService.guestRanges(), reachable),
+        )
     }
 
     /**

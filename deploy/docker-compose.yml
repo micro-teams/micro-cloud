@@ -74,6 +74,7 @@ services:
         "microcloud.superadmin-password":"${SUPERADMIN_PASSWORD}",
         "microcloud.newapi.root-password":"${NEWAPI_ROOT_PASSWORD}",
         "microcloud.newapi.machine-base-url":"${NEWAPI_MACHINE_BASE_URL}",
+        "microcloud.provisioning.guest-reachable":"${MICROCLOUD_GUEST_REACHABLE:-}",
         "microcloud.ccproxy.base-url":"${CCPROXY_BASE_URL}",
         "microcloud.ccproxy.tenant-secret":"${CCPROXY_TENANT_SECRET}"}
     healthcheck:

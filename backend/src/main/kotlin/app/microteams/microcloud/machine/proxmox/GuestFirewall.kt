@@ -1,6 +1,7 @@
 /*
  *  Description: The network isolation a guest gets from the Proxmox firewall: what it may reach
- *               (DNS, the internet, the newapi relay) and what it may not (private addresses, which
+ *               (DNS, the internet, the newapi relay and
+ *               the private endpoints the deployment lists) and what it may not (private addresses, which
  *               hold the control plane, the deployment's servers and the other guests). The rules
  *               sit on the host side of the guest's NIC, so root inside the guest cannot lift them.
  *
@@ -44,29 +45,41 @@ private val PRIVATE_DESTINATIONS =
     )
 
 /**
- * The rules isolating a guest, in evaluation order. Outbound, the guest reaches DNS, the newapi
- * [relay] (host and port) if there is one, and every public address; every private one is dropped.
- * Inbound, the other guests ([guestRanges], plus IPv6 link-local) are dropped and everyone else is
- * let in, since the backend, the tenant and its own services reach the guest over SSH from the
- * private network; the guest's own firewall decides which of its ports answer.
+ * The rules isolating a guest, in evaluation order. Outbound, the guest reaches DNS, each
+ * [reachable] private host and port (the newapi relay, and whatever the deployment lists in
+ * `microcloud.provisioning.guest-reachable`), and every public address; every other private one is
+ * dropped. Inbound, the other guests ([guestRanges], plus IPv6 link-local) are dropped and everyone
+ * else is let in, since the backend, the tenant and its own services reach the guest over SSH from
+ * the private network; the guest's own firewall decides which of its ports answer.
  *
  * Port 53 is open to every destination because the resolver a guest is given is on a private
  * address the backend cannot read (it needs Sys.Audit on the node). ccproxy's engine is not let
- * through: MicroCloud does not know its address, so a deployment that wires ccproxy in again has to
- * add it here.
+ * through unless the deployment lists it: MicroCloud does not know its address.
  */
 fun guestIsolationRules(
     guestRanges: List<String>,
-    relay: Pair<String, Int>?,
+    reachable: List<Pair<String, Int>>,
 ): List<GuestFirewallRule> = buildList {
     add(GuestFirewallRule("out", "ACCEPT", proto = "udp", dport = "53"))
     add(GuestFirewallRule("out", "ACCEPT", proto = "tcp", dport = "53"))
-    relay?.let { (host, port) ->
+    reachable.forEach { (host, port) ->
         add(GuestFirewallRule("out", "ACCEPT", dest = host, proto = "tcp", dport = "$port"))
     }
     PRIVATE_DESTINATIONS.forEach { add(GuestFirewallRule("out", "DROP", dest = it)) }
     guestRanges.forEach { add(GuestFirewallRule("in", "DROP", source = it)) }
     add(GuestFirewallRule("in", "DROP", source = "fe80::/10"))
+}
+
+/**
+ * The address and port of a `host:port` entry of `microcloud.provisioning.guest-reachable`. A host
+ * name is resolved here, since a firewall rule takes addresses only.
+ */
+fun reachableEndpoint(hostPort: String): Pair<String, Int> {
+    val host = hostPort.substringBeforeLast(':')
+    val port =
+        hostPort.substringAfterLast(':', "").toIntOrNull()
+            ?: throw IllegalArgumentException("guest-reachable entry $hostPort is not host:port")
+    return InetAddress.getByName(host).hostAddress to port
 }
 
 /**

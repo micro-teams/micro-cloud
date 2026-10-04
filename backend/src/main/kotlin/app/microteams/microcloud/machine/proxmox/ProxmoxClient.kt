@@ -245,23 +245,24 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
             .asText()
 
     /**
-     * Put VM [vmid]'s `net0` behind the Proxmox firewall with exactly [rules] (see
-     * [guestIsolationRules]), before the VM first starts. The ipfilter set holds only [ip], so the
-     * guest can neither send from nor answer ARP for any other address on the shared segment. Reads
-     * the rules back and throws unless they are exactly [rules], all enabled: Proxmox inserts each
-     * new rule at the top and leaves it disabled unless told otherwise, so a rule list that reaches
-     * it in the wrong shape still saves without an error.
+     * Put guest [vmid]'s `net0` (a VM's when [vm], else a container's) behind the Proxmox firewall
+     * with exactly [rules] (see [guestIsolationRules]), before the guest first starts. The ipfilter
+     * set holds only [ip], so the guest can neither send from nor answer ARP for any other address
+     * on the shared segment. Reads the rules back and throws unless they are exactly [rules], all
+     * enabled: Proxmox inserts each new rule at the top and leaves it disabled unless told
+     * otherwise, so a rule list that reaches it in the wrong shape still saves without an error.
      */
-    fun isolateVm(
+    fun isolateGuest(
         cluster: ProxmoxCluster,
         node: String,
         vmid: Int,
+        vm: Boolean,
         ip: String,
         rules: List<GuestFirewallRule>,
     ) {
-        val base = "/nodes/$node/qemu/$vmid"
+        val base = "/nodes/$node/${if (vm) "qemu" else "lxc"}/$vmid"
         val net0 = send(cluster, "GET", "$base/config", null).path("net0").asText("")
-        check(net0.isNotBlank()) { "VM $vmid has no net0 to isolate" }
+        check(net0.isNotBlank()) { "Guest $vmid has no net0 to isolate" }
         val firewalled =
             (net0.split(',').filterNot { it.startsWith("firewall=") } + "firewall=1").joinToString(
                 ","
@@ -305,11 +306,11 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
                 ) to (it.path("enable").asInt(0) == 1)
             }
         check(applied == rules.map { it to true }) {
-            "VM $vmid firewall rules read back as $applied, expected $rules"
+            "Guest $vmid firewall rules read back as $applied, expected $rules"
         }
         val options = send(cluster, "GET", "$base/firewall/options", null)
         check(options.path("enable").asInt(0) == 1 && options.path("ipfilter").asInt(0) == 1) {
-            "VM $vmid firewall options read back as $options"
+            "Guest $vmid firewall options read back as $options"
         }
     }
 
