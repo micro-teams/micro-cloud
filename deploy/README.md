@@ -51,6 +51,7 @@ consumed — nothing is silently ignored.
 | `NGINX_HTTP_PORT` | nginx `ports` | host port the gateway listens on (default 80) |
 | `NEWAPI_MACHINE_PORT` | nginx `ports` | host port of the newapi relay alone, which machines reach (default 8090) |
 | `MICROCLOUD_GUEST_REACHABLE` | backend (`microcloud.provisioning.guest-reachable`) | private `host:port` endpoints machines may reach through their isolation, comma-separated (default none) |
+| `MICROCLOUD_GUEST_BLOCKED` | backend (`microcloud.provisioning.guest-blocked`) | public `host:port` endpoints machines may not reach, comma-separated, e.g. the Proxmox nodes' API and SSH ports (default none) |
 
 **Provisioning needs no environment variables.** `gen-env.sh` generates the operator SSH keypair at
 `./keys/operator`, and the backend defaults to it (`/keys/operator`, mounted read-only at `/keys`)
@@ -200,8 +201,8 @@ on its machine, so no firewall inside the guest can limit what it reaches. Every
 LXC, is therefore created with `firewall=1` on its NIC and a Proxmox firewall of its own, set before
 its first boot and enforced on the host:
 
-- out: DNS (port 53), the newapi relay's host:port and each `MICROCLOUD_GUEST_REACHABLE` endpoint are
-  allowed; every other private, link-local and CGNAT destination (10/8, 172.16/12, 192.168/16,
+- out: each `MICROCLOUD_GUEST_BLOCKED` endpoint is dropped first; then DNS (port 53), the newapi
+  relay's host:port and each `MICROCLOUD_GUEST_REACHABLE` endpoint are allowed; every other private, link-local and CGNAT destination (10/8, 172.16/12, 192.168/16,
   169.254/16, 100.64/10, fe80::/10, fc00::/7) is dropped; everything else, the internet, is allowed.
 - in: every network's address range (the other machines) and IPv6 link-local are dropped; the rest is
   allowed, so the backend, the tenant and its services still reach the machine over SSH.
@@ -212,6 +213,11 @@ leaves with the machine's address and gets the same treatment. Proxmox drops the
 guest when the guest is destroyed. Machines created before this release keep running unisolated.
 Anything private a machine needs, such as ccproxy's engine or a service of the calling platform, has
 to be listed in `MICROCLOUD_GUEST_REACHABLE`.
+
+A Proxmox node's public address is not private space, so its API (8006) and SSH (22) stay reachable
+unless listed in `MICROCLOUD_GUEST_BLOCKED`. That closes the address itself only: a machine that
+reaches the node through a proxy on its network, under a name the proxy resolves, is not stopped by
+the machine's own firewall.
 
 ## Domain-independent
 

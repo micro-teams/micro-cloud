@@ -15,7 +15,7 @@ import app.microteams.microcloud.machine.proxmox.GuestFirewallRule
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
 import app.microteams.microcloud.machine.proxmox.guestIsolationRules
-import app.microteams.microcloud.machine.proxmox.reachableEndpoint
+import app.microteams.microcloud.machine.proxmox.hostPortEndpoint
 import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
@@ -33,7 +33,13 @@ class ProxmoxGuestFirewallTest {
     private val guests = listOf("10.20.0.1-10.20.0.254", "10.21.0.7")
     private val relay = "10.1.0.5" to 8090
     private val gateway = "10.1.0.9" to 443
-    private val rules = guestIsolationRules(guests, listOf(relay, gateway))
+    private val hypervisor = "203.0.113.7"
+    private val rules =
+        guestIsolationRules(
+            guests,
+            listOf(relay, gateway),
+            listOf(hypervisor to 8006, hypervisor to 22),
+        )
 
     // ---- the policy ----
 
@@ -81,6 +87,14 @@ class ProxmoxGuestFirewallTest {
     }
 
     @Test
+    fun `listed public management ports are closed, the rest of that host is not`() {
+        assertEquals("DROP", verdict("out", hypervisor, "tcp", 8006))
+        assertEquals("DROP", verdict("out", hypervisor, "tcp", 22))
+        assertEquals("ACCEPT", verdict("out", hypervisor, "tcp", 443))
+        assertEquals("ACCEPT", verdict("out", hypervisor, "udp", 53))
+    }
+
+    @Test
     fun `a guest reaches nothing private beyond those`() {
         // The relay host's other ports: the control plane's own API sits there.
         assertEquals("DROP", verdict("out", "10.1.0.5", "tcp", 80))
@@ -108,17 +122,20 @@ class ProxmoxGuestFirewallTest {
     @Test
     fun `with nothing listed no private port is open`() {
         val bare = guestIsolationRules(guests, emptyList())
-        assertEquals(rules.filterNot { it.dest == "10.1.0.5" || it.dest == "10.1.0.9" }, bare)
+        assertEquals(
+            rules.filterNot { it.dest in setOf("10.1.0.5", "10.1.0.9", hypervisor) },
+            bare,
+        )
     }
 
     @Test
     fun `a listed endpoint is host and port`() {
-        assertEquals("10.1.0.9" to 443, reachableEndpoint("10.1.0.9:443"))
+        assertEquals("10.1.0.9" to 443, hostPortEndpoint("10.1.0.9:443"))
         assertEquals(
             InetAddress.getByName("localhost").hostAddress to 8443,
-            reachableEndpoint("localhost:8443"),
+            hostPortEndpoint("localhost:8443"),
         )
-        assertThrows(IllegalArgumentException::class.java) { reachableEndpoint("10.1.0.9") }
+        assertThrows(IllegalArgumentException::class.java) { hostPortEndpoint("10.1.0.9") }
     }
 
     @Test
