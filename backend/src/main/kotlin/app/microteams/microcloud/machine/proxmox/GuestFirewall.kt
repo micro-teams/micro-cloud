@@ -45,8 +45,10 @@ private val PRIVATE_DESTINATIONS =
     )
 
 /**
- * The rules isolating a guest, in evaluation order. Outbound, the guest reaches DNS, each
- * [reachable] private host and port (the newapi relay, and whatever the deployment lists in
+ * The rules isolating a guest, in evaluation order. Outbound, each [blocked] host and port is
+ * dropped first: a management port the deployment wants closed although its address is public,
+ * which the private-range drops do not cover. Then the guest reaches DNS, each [reachable] private
+ * host and port (the newapi relay, and whatever the deployment lists in
  * `microcloud.provisioning.guest-reachable`), and every public address; every other private one is
  * dropped. Inbound, the other guests ([guestRanges], plus IPv6 link-local) are dropped and everyone
  * else is let in, since the backend, the tenant and its own services reach the guest over SSH from
@@ -59,7 +61,11 @@ private val PRIVATE_DESTINATIONS =
 fun guestIsolationRules(
     guestRanges: List<String>,
     reachable: List<Pair<String, Int>>,
+    blocked: List<Pair<String, Int>> = emptyList(),
 ): List<GuestFirewallRule> = buildList {
+    blocked.forEach { (host, port) ->
+        add(GuestFirewallRule("out", "DROP", dest = host, proto = "tcp", dport = "$port"))
+    }
     add(GuestFirewallRule("out", "ACCEPT", proto = "udp", dport = "53"))
     add(GuestFirewallRule("out", "ACCEPT", proto = "tcp", dport = "53"))
     reachable.forEach { (host, port) ->
@@ -71,14 +77,14 @@ fun guestIsolationRules(
 }
 
 /**
- * The address and port of a `host:port` entry of `microcloud.provisioning.guest-reachable`. A host
- * name is resolved here, since a firewall rule takes addresses only.
+ * The address and port of a `host:port` entry of `microcloud.provisioning.guest-reachable` or
+ * `guest-blocked`. A host name is resolved here, since a firewall rule takes addresses only.
  */
-fun reachableEndpoint(hostPort: String): Pair<String, Int> {
+fun hostPortEndpoint(hostPort: String): Pair<String, Int> {
     val host = hostPort.substringBeforeLast(':')
     val port =
         hostPort.substringAfterLast(':', "").toIntOrNull()
-            ?: throw IllegalArgumentException("guest-reachable entry $hostPort is not host:port")
+            ?: throw IllegalArgumentException("$hostPort is not host:port")
     return InetAddress.getByName(host).hostAddress to port
 }
 

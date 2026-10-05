@@ -13,6 +13,7 @@
 package app.microteams.microcloud.api
 
 import app.microteams.microcloud.machine.MachineKind
+import app.microteams.microcloud.machine.proxmox.GuestFirewallRule
 import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.template.MachineTemplate
@@ -23,9 +24,11 @@ import app.microteams.microcloud.machine.template.TemplateUploadStatus
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.clearMocks
 import io.mockk.every
+import io.mockk.slot
 import io.mockk.verify
 import io.mockk.verifyOrder
 import org.json.JSONObject
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation
 import org.junit.jupiter.api.Order
@@ -47,7 +50,13 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.*
 @AutoConfigureMockMvc
 @TestMethodOrder(OrderAnnotation::class)
 // No SSH init: ProxmoxClient is mocked, and there's no real machine to SSH into.
-@TestPropertySource(properties = ["microcloud.provisioning.init-command="])
+@TestPropertySource(
+    properties =
+        [
+            "microcloud.provisioning.init-command=",
+            "microcloud.provisioning.guest-blocked=203.0.113.7:8006,203.0.113.7:22",
+        ]
+)
 class MachineProvisionTest
 @Autowired
 constructor(
@@ -285,10 +294,32 @@ constructor(
         // The container is put behind its firewall, holding its own leased address, before its
         // first start.
         verify(timeout = 5000) { proxmoxClient.startLxc(any(), any(), any()) }
+        val isolation = slot<List<GuestFirewallRule>>()
         verifyOrder {
-            proxmoxClient.isolateGuest(any(), any(), any(), eq(false), eq("10.9.0.10"), any())
+            proxmoxClient.isolateGuest(
+                any(),
+                any(),
+                any(),
+                eq(false),
+                eq("10.9.0.10"),
+                capture(isolation),
+            )
             proxmoxClient.startLxc(any(), any(), any())
         }
+        // The deployment's blocked management ports are dropped ahead of every other rule.
+        assertEquals(
+            listOf(
+                GuestFirewallRule(
+                    "out",
+                    "DROP",
+                    dest = "203.0.113.7",
+                    proto = "tcp",
+                    dport = "8006",
+                ),
+                GuestFirewallRule("out", "DROP", dest = "203.0.113.7", proto = "tcp", dport = "22"),
+            ),
+            isolation.captured.take(2),
+        )
 
         // The network now reports one address allocated.
         mockMvc

@@ -49,6 +49,9 @@ NEWAPI_MACHINE_BASE_URL=http://$HOST_IP:$RELAY_PORT/newapi
 # Private host:port endpoints (comma-separated) that machines may still reach through their network
 # isolation, beyond DNS and the newapi relay: a service on this network machines are meant to use.
 MICROCLOUD_GUEST_REACHABLE=
+# Public host:port endpoints (comma-separated) machines may NOT reach, such as Proxmox's own
+# management ports (API 8006, SSH 22) on the nodes' public addresses.
+MICROCLOUD_GUEST_BLOCKED=
 
 # ccproxy (OPTIONAL — the super-admin-triggered switch to a real subscription login behind the
 # ccproxy MITM). ccproxy is an external service; MicroCloud is one of its tenants. Leave both blank

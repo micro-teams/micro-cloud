@@ -138,6 +138,12 @@ class MicroCloudConfig {
          * (see guestIsolationRules). Empty by default.
          */
         var guestReachable: List<String> = emptyList()
+        /**
+         * `host:port` endpoints an isolated machine may not open TCP connections to although they
+         * are public addresses, such as a hypervisor's management ports. Dropped before any other
+         * rule. Empty by default.
+         */
+        var guestBlocked: List<String> = emptyList()
         /** How long to wait for a freshly-started machine to accept SSH (TCP :22) before init. */
         var sshReadyTimeoutSeconds: Long = 120
 

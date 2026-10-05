@@ -53,7 +53,7 @@ import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.proxmox.guestIsolationRules
-import app.microteams.microcloud.machine.proxmox.reachableEndpoint
+import app.microteams.microcloud.machine.proxmox.hostPortEndpoint
 import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
 import app.microteams.microcloud.machine.template.TemplateUpload
@@ -563,14 +563,18 @@ class MachineProvisioner(
             listOfNotNull(relayEndpoint(config.newapi.machineBaseUrl)) +
                 config.provisioning.guestReachable
                     .filter { it.isNotBlank() }
-                    .map(::reachableEndpoint)
+                    .map(::hostPortEndpoint)
         proxmoxClient.isolateGuest(
             cluster,
             node,
             vmid,
             vm,
             machine.ip!!,
-            guestIsolationRules(networkService.guestRanges(), reachable),
+            guestIsolationRules(
+                networkService.guestRanges(),
+                reachable,
+                config.provisioning.guestBlocked.filter { it.isNotBlank() }.map(::hostPortEndpoint),
+            ),
         )
     }
 
