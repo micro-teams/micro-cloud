@@ -47,8 +47,8 @@ private val PRIVATE_DESTINATIONS =
 /**
  * The rules isolating a guest, in evaluation order. Outbound, each [blocked] host and port is
  * dropped first: a management port the deployment wants closed although its address is public,
- * which the private-range drops do not cover. Then the guest reaches DNS, each
- * [reachable] private host and port (the newapi relay, and whatever the deployment lists in
+ * which the private-range drops do not cover. Then the guest reaches DNS, each [reachable] private
+ * host and port (the newapi relay, and whatever the deployment lists in
  * `microcloud.provisioning.guest-reachable`), and every public address; every other private one is
  * dropped. Inbound, the other guests ([guestRanges], plus IPv6 link-local) are dropped and everyone
  * else is let in, since the backend, the tenant and its own services reach the guest over SSH from

@@ -122,10 +122,7 @@ class ProxmoxGuestFirewallTest {
     @Test
     fun `with nothing listed no private port is open`() {
         val bare = guestIsolationRules(guests, emptyList())
-        assertEquals(
-            rules.filterNot { it.dest in setOf("10.1.0.5", "10.1.0.9", hypervisor) },
-            bare,
-        )
+        assertEquals(rules.filterNot { it.dest in setOf("10.1.0.5", "10.1.0.9", hypervisor) }, bare)
     }
 
     @Test

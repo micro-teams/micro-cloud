@@ -309,7 +309,13 @@ constructor(
         // The deployment's blocked management ports are dropped ahead of every other rule.
         assertEquals(
             listOf(
-                GuestFirewallRule("out", "DROP", dest = "203.0.113.7", proto = "tcp", dport = "8006"),
+                GuestFirewallRule(
+                    "out",
+                    "DROP",
+                    dest = "203.0.113.7",
+                    proto = "tcp",
+                    dport = "8006",
+                ),
                 GuestFirewallRule("out", "DROP", dest = "203.0.113.7", proto = "tcp", dport = "22"),
             ),
             isolation.captured.take(2),
