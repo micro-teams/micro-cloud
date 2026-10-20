@@ -75,6 +75,9 @@ class Machine(
     @Column(nullable = false) var cores: Int? = null,
     @Column(name = "memory_mb", nullable = false) var memoryMb: Int? = null,
     @Column(name = "disk_gb", nullable = false) var diskGb: Int? = null,
+    // A second, empty disk beside the root disk, sized by the machine type at create; null or 0 =
+    // none. Nullable so ddl-auto can add the column to a table that already has rows.
+    @Column(name = "data_disk_gb") var dataDiskGb: Int? = null,
     // Internal provisioning coordinates (not exposed to tenants).
     @Column(name = "placement_id", nullable = false) var placementId: IdType? = null,
     @Column(name = "network_id", nullable = false) var networkId: IdType? = null,
@@ -119,6 +122,15 @@ interface MachineRepository : JpaRepository<Machine, IdType> {
         nativeQuery = true,
     )
     fun advisoryLock(@Param("key") key: String): Int
+
+    /**
+     * [advisoryLock] without waiting: false, and nothing taken, when another transaction has it.
+     */
+    @Query(
+        value = "select pg_try_advisory_xact_lock(hashtextextended(:key, 0))",
+        nativeQuery = true,
+    )
+    fun tryAdvisoryLock(@Param("key") key: String): Boolean
 
     /** Move machine [id] from PROVISIONING to [to]; 0 when something else moved it first. */
     @Modifying

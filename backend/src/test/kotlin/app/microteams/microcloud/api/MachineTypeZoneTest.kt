@@ -148,8 +148,29 @@ constructor(
                 .andExpect(jsonPath("$.name").value("standard"))
                 .andExpect(jsonPath("$.placementIds[0]").value(placementId))
                 .andExpect(jsonPath("$.status").value("active"))
+                .andExpect(jsonPath("$.dataDiskGb").value(0))
                 .andReturn()
         typeId = JSONObject(res.response.contentAsString).getLong("id")
+    }
+
+    @Test
+    @Order(6)
+    fun adminSetsTheDataDiskSize() {
+        fun patchType(body: String) =
+            mockMvc.perform(
+                patch("/machine/type/$typeId")
+                    .header("Authorization", "Bearer $adminToken")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body)
+            )
+        patchType("""{"dataDiskGb":32}""")
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.dataDiskGb").value(32))
+        patchType("""{"dataDiskGb":-1}""").andExpect(status().isBadRequest)
+        // An update that does not mention the data disk leaves it as it was.
+        patchType("""{"coresMax":8}""")
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.dataDiskGb").value(32))
     }
 
     @Test

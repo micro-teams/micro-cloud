@@ -13,16 +13,29 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# The base cloud image's first-boot cloud-init runs its own apt (Proxmox sets package_upgrade), which
-# holds the dpkg/apt lock. MicroCloud SSHes in as soon as TCP :22 is up — possibly while that apt is
-# still running — so wait for cloud-init to finish before our own apt, or `apt-get` fails to take the
-# lock ("Could not get lock /var/lib/apt/lists/lock"). `|| true`: a degraded/errored cloud-init still
-# means its apt is done, and we'd rather proceed than abort the bake.
+# The base cloud image's first-boot cloud-init may run its own apt (it does whenever the VM was
+# created without ciupgrade=0), which holds the dpkg/apt lock. MicroCloud SSHes in as soon as TCP :22
+# is up — possibly while that apt is still running — so wait for cloud-init to finish before our own
+# apt, or `apt-get` fails to take the lock ("Could not get lock /var/lib/apt/lists/lock").
+# `|| true`: a degraded/errored cloud-init still means its apt is done, and we'd rather proceed than
+# abort the bake.
 echo "[build] waiting for first-boot cloud-init to finish..."
 cloud-init status --wait >/dev/null 2>&1 || true
 
-# --- Docker, via Docker's official apt repository (the standard Debian install flow) ---
+# --- Bring every package up to date ---
+# The template is the only place packages are upgraded: clones boot with cloud-init's upgrade off
+# (ciupgrade=0, which cost every machine 77 s of first boot), so a machine is as fresh as the bake
+# it was cloned from. Re-bake the template to pick up updates.
 apt-get update
+apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade
+
+# --- qemu-guest-agent ---
+# The VM is created with agent=1, but the Debian cloud image does not ship the agent, so Proxmox
+# waited out its guest-agent timeout on every shutdown. The service starts on its own once the
+# agent's virtio port appears (every clone has it), so there is nothing to enable.
+apt-get install -y qemu-guest-agent
+
+# --- Docker, via Docker's official apt repository (the standard Debian install flow) ---
 # ca-certificates+curl for the Docker repo below; tmux is required by the ccproxy subscription-login
 # flow (it drives Claude Code inside a tmux session and does not install tmux itself).
 apt-get install -y ca-certificates curl tmux

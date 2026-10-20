@@ -208,13 +208,20 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
     fun createVm(cluster: ProxmoxCluster, node: String, params: Map<String, String>): String =
         send(cluster, "POST", "/nodes/$node/qemu", params).asText()
 
-    /** Full-clone a VM/template into a new vmid on the same node. Returns the clone task UPID. */
+    /** Clone a VM/template into a new vmid on the same node. Returns the clone task UPID. */
     fun cloneVm(
         cluster: ProxmoxCluster,
         node: String,
         sourceVmid: Int,
         params: Map<String, String>,
     ): String = send(cluster, "POST", "/nodes/$node/qemu/$sourceVmid/clone", params).asText()
+
+    /**
+     * The value of one key of a VM's config, e.g. `scsi0` ->
+     * `local-lvm:base-146-disk-0/vm-158-disk-0,discard=on,size=3G`; blank when the key is unset.
+     */
+    fun vmConfigValue(cluster: ProxmoxCluster, node: String, vmid: Int, key: String): String =
+        send(cluster, "GET", "/nodes/$node/qemu/$vmid/config", null).path(key).asText("")
 
     /** Update a VM's config (cloud-init ciuser / sshkeys / ipconfig0, cores, memory, …). Sync. */
     fun setVmConfig(cluster: ProxmoxCluster, node: String, vmid: Int, params: Map<String, String>) {
@@ -482,7 +489,13 @@ class ProxmoxClient(private val objectMapper: ObjectMapper) {
             if (e.message?.contains("already exists") == true) false else throw e
         }
 
-    /** Next free VM/CT id in the cluster. */
+    /** Whether some guest in the cluster already holds [vmid] (see [vmidIsFree]). */
+    fun vmidTaken(cluster: ProxmoxCluster, vmid: Int): Boolean = !vmidIsFree(cluster, vmid)
+
+    /**
+     * Lowest VM/CT id no guest holds right now. Two callers asking before either creates its guest
+     * get the same id; allocate through GuestIdAllocator, never use this directly.
+     */
     fun nextVmid(cluster: ProxmoxCluster): Int =
         send(cluster, "GET", "/cluster/nextid", null).asText().toInt()
 

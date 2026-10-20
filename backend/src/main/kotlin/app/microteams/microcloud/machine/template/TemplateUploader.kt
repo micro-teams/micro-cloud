@@ -24,6 +24,7 @@ import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.effectiveKind
+import app.microteams.microcloud.machine.proxmox.GuestIdAllocator
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
 import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
@@ -42,6 +43,7 @@ class TemplateUploader(
     private val templateRepository: MachineTemplateRepository,
     private val uploadRepository: TemplateUploadRepository,
     private val proxmoxClient: ProxmoxClient,
+    private val guestIds: GuestIdAllocator,
     private val operatorSsh: OperatorSsh,
     private val config: MicroCloudConfig,
 ) {
@@ -124,6 +126,13 @@ class TemplateUploader(
      * build.sh over SSH, powers off, `qm template`s it, and records the template vmid. The temp IP
      * is always released. Mirrors the operator's manual flow (create → boot → apt docker + docker
      * group → shutdown → template).
+     *
+     * Re-baking (uploading the template to the placement again) always makes a NEW template under a
+     * new vmid and points the upload row at it; the previous template is left in place. Machines
+     * are linked clones of the template they were created from, so its base disk must outlive them:
+     * it is never destroyed here, and Proxmox itself refuses to destroy a template whose base
+     * volume a linked clone still uses. Remove an old template by hand once no machine cloned from
+     * it remains.
      */
     private fun bakeVm(
         upload: TemplateUpload,
@@ -169,7 +178,8 @@ class TemplateUploader(
         var bakeVmid: Int? = null
         try {
             // 3. Create the throwaway VM importing the base image, with cloud-init operator access.
-            val vmid = proxmoxClient.nextVmid(cluster)
+            // Allocated under the guest lock, held until this upload's transaction commits.
+            val vmid = guestIds.allocate(cluster)
             bakeVmid = vmid
             val createParams = buildMap {
                 put("vmid", vmid.toString())
@@ -180,15 +190,21 @@ class TemplateUploader(
                 put("scsihw", "virtio-scsi-single")
                 // discard=on: the disk is thin-provisioned, and without it blocks a guest frees
                 // stay allocated in the pool for the VM's whole life (three CI runners sat at
-                // 95-98% of their volumes with 55% used inside, 2026-09-03). agent=1: the
-                // guest image ships qemu-guest-agent, but it only talks to the host once the
-                // VM has the device, and with it the host can read usage and fstrim without
-                // logging in. Both are inherited by every clone of the template.
+                // 95-98% of their volumes with 55% used inside, 2026-09-03). iothread=1: the
+                // disk gets its own I/O thread (see MachineProvisioner.provisionVm). agent=1:
+                // build.sh installs qemu-guest-agent (the base cloud image lacks it), which
+                // talks to the host only once the VM has the device; with it a shutdown is
+                // clean instead of waiting out the agent timeout, and the host can read usage
+                // and fstrim without logging in. All three are inherited by every clone.
                 put(
                     "scsi0",
-                    "${placement.storage}:0,import-from=$importStorage:import/$imageName,discard=on",
+                    "${placement.storage}:0,import-from=$importStorage:import/$imageName," +
+                        "discard=on,iothread=1",
                 )
                 put("agent", "1")
+                // build.sh upgrades every package itself, so the template is as fresh as its
+                // bake; cloud-init must not repeat that on every clone's first boot.
+                put("ciupgrade", "0")
                 put("ide2", "${placement.storage}:cloudinit")
                 put("boot", "order=scsi0")
                 put("serial0", "socket")

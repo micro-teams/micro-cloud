@@ -13,7 +13,7 @@ no packaged artifact and nothing to build in CI, only the two descriptors here.
 | path | what |
 |---|---|
 | `image-url` | One line: the http(s) URL of the base Debian 13 cloud image (`genericcloud` qcow2). MicroCloud downloads it to the placement's import storage as the starting point of the bake. |
-| `build.sh` | The bake customization script. MicroCloud runs it **inside** a throwaway VM booted from the base image (over SSH, as `sudo bash -s`): installs Docker via Docker's apt repo and appends `docker` to the cloud-init default-user groups so every clone's login user is Docker-ready, then resets cloud-init. It does **not** power off — MicroCloud stops + templates the VM afterwards. |
+| `build.sh` | The bake customization script. MicroCloud runs it **inside** a throwaway VM booted from the base image (over SSH, as `sudo bash -s`): upgrades every package, installs `qemu-guest-agent` and Docker (via Docker's apt repo), and appends `docker` to the cloud-init default-user groups so every clone's login user is Docker-ready, then resets cloud-init. It does **not** power off — MicroCloud stops + templates the VM afterwards. |
 | `init-machine.py` | Per-machine setup (**stage 2**), the VM counterpart of the LXC template's baked init. NOT baked into the image: after cloud-init creates the login user at clone, MicroCloud SSHes in as that user (with the operator key) and pipes this to `sudo python3 -` to install per-user software (Claude Code / AI tools), write the newapi relay config, and harden. Idempotent; `--ip` is not passed (cloud-init already set it). |
 
 ## Lifecycle (MicroCloud does all of this — see `TemplateUploader.bakeVm` / `MachineProvisioner.provisionVm`)
@@ -22,9 +22,15 @@ no packaged artifact and nothing to build in CI, only the two descriptors here.
    download `image-url` → `qm create` a throwaway VM importing it, with a cloud-init operator user +
    key + a leased temp IP → boot → SSH in and run `build.sh` → power off → `qm template`. The
    resulting template vmid is recorded on the upload row; the temp IP is released.
+   Packages are upgraded here and only here (clones boot with `ciupgrade=0`), so a machine is as
+   fresh as its template: **re-bake to update**. A re-bake makes a new template under a new vmid and
+   leaves the old one, which machines linked-cloned from it still need; delete it by hand once none
+   remain (Proxmox refuses while any do).
 2. **Per machine — two stages:**
-   1. **cloud-init (at clone):** `qm clone` the template → inject the login user + its SSH key + the
-      operator key + a static IP (and cores / memory / disk) → boot. The machine is reachable as the
+   1. **cloud-init (at clone):** linked-clone the template (`qm clone`, `full=0`: ~3 s instead of
+      ~20 s for a full copy) → inject the login user + its SSH key + the
+      operator key + a static IP (and cores / memory / disk, `iothread=1` on each disk, and the
+      machine type's optional empty data disk as `scsi1`) → boot. The machine is reachable as the
       login user the moment it boots, already in the `docker` group.
    2. **init-machine.py (after boot):** MicroCloud SSHes in as the login user (with the operator
       key) and pipes `init-machine.py` to `sudo python3 -` for per-user software install and final

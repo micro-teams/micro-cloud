@@ -40,6 +40,9 @@ class MachineType(
     @Column(name = "memory_mb_max", nullable = false) var memoryMbMax: Int? = null,
     @Column(name = "disk_gb_min", nullable = false) var diskGbMin: Int? = null,
     @Column(name = "disk_gb_max", nullable = false) var diskGbMax: Int? = null,
+    // Size of the data disk every machine of this type gets beside its root disk; null or 0 =
+    // none. Nullable so ddl-auto can add the column to a table that already has rows.
+    @Column(name = "data_disk_gb") var dataDiskGb: Int? = null,
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     var status: MachineTypeStatus = MachineTypeStatus.ACTIVE,

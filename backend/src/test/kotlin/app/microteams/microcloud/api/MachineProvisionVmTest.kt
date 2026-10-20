@@ -28,6 +28,8 @@ import io.mockk.slot
 import io.mockk.verify
 import io.mockk.verifyOrder
 import org.json.JSONObject
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -130,7 +132,7 @@ constructor(
                     post(
                             "/machine/type",
                             adminToken,
-                            """{"name":"standard","placementIds":[$placementId],"coresMin":1,"coresMax":4,"memoryMbMin":1024,"memoryMbMax":8192,"diskGbMin":10,"diskGbMax":100}""",
+                            """{"name":"standard","placementIds":[$placementId],"coresMin":1,"coresMax":4,"memoryMbMin":1024,"memoryMbMax":8192,"diskGbMin":10,"diskGbMax":100,"dataDiskGb":32}""",
                         )
                         .response
                         .contentAsString
@@ -190,6 +192,9 @@ constructor(
 
         every { proxmoxClient.resizeVmDisk(any(), any(), any(), any(), any()) } returns
             "UPID:pve:resize-task"
+        // A linked clone's root disk is a thin child of the template's base volume.
+        every { proxmoxClient.vmConfigValue(any(), any(), any(), "scsi0") } returns
+            "local-lvm:base-9000-disk-0/vm-1-disk-0,discard=on,size=3G"
 
         val res =
             mockMvc
@@ -204,13 +209,37 @@ constructor(
                 .andExpect(status().isCreated)
                 .andExpect(jsonPath("$.status").value("provisioning"))
                 .andExpect(jsonPath("$.ip").value("10.8.0.10"))
+                .andExpect(jsonPath("$.dataDiskGb").value(32))
+                .andExpect(jsonPath("$.placement.kind").value("proxmox/vm"))
+                .andExpect(jsonPath("$.placement.cluster").value("lab"))
+                .andExpect(jsonPath("$.placement.node").value("pve"))
                 .andReturn()
         val machineId = JSONObject(res.response.contentAsString).getLong("id")
 
         // The async worker takes the VM branch: it clones the baked template and never touches the
         // LXC path.
-        verify(timeout = 5000) { proxmoxClient.cloneVm(any(), eq("pve"), eq(9000), any()) }
+        val cloneParams = slot<Map<String, String>>()
+        verify(timeout = 5000) {
+            proxmoxClient.cloneVm(any(), eq("pve"), eq(9000), capture(cloneParams))
+        }
         verify(exactly = 0) { proxmoxClient.createLxc(any(), any(), any()) }
+        // A linked clone (~3 s), not a full copy of the template's disk (20-24 s on pve119).
+        assertEquals("0", cloneParams.captured["full"])
+
+        // cloud-init does not upgrade packages on first boot (77 s on pve119); each disk gets its
+        // own I/O thread, the root disk keeps its options, and the type's data disk is attached.
+        val config = slot<Map<String, String>>()
+        verify(timeout = 5000) {
+            proxmoxClient.setVmConfig(any(), eq("pve"), any(), capture(config))
+        }
+        assertEquals("0", config.captured["ciupgrade"])
+        assertEquals(
+            "local-lvm:base-9000-disk-0/vm-1-disk-0,size=3G,discard=on,iothread=1",
+            config.captured["scsi0"],
+        )
+        assertEquals("local-lvm:32,discard=on,iothread=1", config.captured["scsi1"])
+        // The balloon device stays (free-page reporting rides on it).
+        assertFalse("balloon" in config.captured)
 
         // The disk resize is a Proxmox task that holds the VM's config lock until the volume has
         // grown, and qm start gives up on that lock after 10 s. So the start must come only after
@@ -247,6 +276,10 @@ constructor(
         // VM branch must qm-stop the (not "stopped") VM before qm-destroying it, since qm destroy
         // refuses a running VM — and never take the LXC destroy path.
         waitForStatus(machineId, "running", secret)
+        mockMvc
+            .perform(get("/machine/$machineId").header("Authorization", "Bearer $secret"))
+            .andExpect(jsonPath("$.placement.kind").value("proxmox/vm"))
+            .andExpect(jsonPath("$.dataDiskGb").value(32))
         mockMvc
             .perform(post("/machine/$machineId/suspend").header("Authorization", "Bearer $secret"))
             .andExpect(status().isAccepted)

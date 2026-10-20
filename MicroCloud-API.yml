@@ -1138,9 +1138,16 @@ components:
         memoryMbMax: { type: integer }
         diskGbMin: { type: integer }
         diskGbMax: { type: integer }
+        dataDiskGb:
+          type: integer
+          minimum: 0
+          description: >-
+            size of the empty data disk every machine of this type gets beside its root disk, in
+            GB; 0 = none. Attached to proxmox/vm machines only; proxmox/lxc machines get their
+            root disk alone.
         status: { $ref: "#/components/schemas/MachineTypeStatus" }
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, name, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, status]
+      required: [id, name, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, dataDiskGb, status]
     CreateMachineTypeRequest:
       type: object
       properties:
@@ -1153,6 +1160,7 @@ components:
         memoryMbMax: { type: integer }
         diskGbMin: { type: integer }
         diskGbMax: { type: integer }
+        dataDiskGb: { type: integer, minimum: 0, description: "data disk size in GB per machine; 0 (the default) = none" }
       required: [name, placementIds, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax]
     UpdateMachineTypeRequest:
       type: object
@@ -1167,6 +1175,7 @@ components:
         memoryMbMax: { type: integer }
         diskGbMin: { type: integer }
         diskGbMax: { type: integer }
+        dataDiskGb: { type: integer, minimum: 0, description: "data disk size in GB for machines created from now on; 0 = none" }
         status: { $ref: "#/components/schemas/MachineTypeStatus" }
     ListMachineTypesResponse:
       type: object
@@ -1273,12 +1282,13 @@ components:
         memoryMbMax: { type: integer }
         diskGbMin: { type: integer }
         diskGbMax: { type: integer }
+        dataDiskGb: { type: integer, description: "data disk size in GB each machine gets beside its root disk; 0 = none (see MachineType)" }
         zoneId: { type: integer, format: int64 }
         zoneName: { type: string }
         templateId: { type: integer, format: int64 }
         templateName: { type: string }
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, tenantId, status, machineTypeId, machineTypeName, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, zoneId, zoneName, templateId, templateName]
+      required: [id, tenantId, status, machineTypeId, machineTypeName, coresMin, coresMax, memoryMbMin, memoryMbMax, diskGbMin, diskGbMax, dataDiskGb, zoneId, zoneName, templateId, templateName]
     CreateOfferingRequest:
       type: object
       properties:
@@ -1405,6 +1415,8 @@ components:
         cores: { type: integer }
         memoryMb: { type: integer }
         diskGb: { type: integer }
+        dataDiskGb: { type: integer, description: "size in GB of the data disk beside the root disk; 0 = none" }
+        placement: { $ref: "#/components/schemas/MachinePlacement" }
         status: { $ref: "#/components/schemas/MachineStatus" }
         ip: { type: string, nullable: true, description: private IP once assigned }
         aiMode:
@@ -1416,7 +1428,21 @@ components:
           description: "AI setup state, independent of `status`: disabled | provisioning | ready | error"
           example: ready
         createdAt: { type: string, format: date-time, nullable: true }
-      required: [id, customerId, accountId, newapiAccountId, ccproxyAccountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, status, aiMode, aiStatus]
+      required: [id, customerId, accountId, newapiAccountId, ccproxyAccountId, hostname, offeringId, typeId, templateId, cores, memoryMb, diskGb, dataDiskGb, placement, status, aiMode, aiStatus]
+    MachinePlacement:
+      type: object
+      description: >-
+        where the machine runs, for display and diagnosis: the form it was created as and the
+        provider's own names for its location. Informational only; nothing in the API takes it as
+        input, and a tenant still chooses only an offering.
+      properties:
+        kind:
+          type: string
+          description: "provider + machine form, e.g. proxmox/lxc or proxmox/vm"
+          example: proxmox/vm
+        cluster: { type: string, description: "name of the provider cluster or region", example: lab }
+        node: { type: string, description: "host within the cluster", example: pve119 }
+      required: [kind, cluster, node]
     ClaimWarmMachineRequest:
       type: object
       properties:

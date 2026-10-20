@@ -45,6 +45,9 @@ MicroCloud deliberately splits its model into two layers.
 - **Logical layer (tenant-facing):** a tiny, provider-agnostic surface — *offerings* (a machine
   type + zone + template a tenant may use), and the *machines* created from them. A tenant never
   learns that a machine is a Proxmox LXC on node `pve119` drawing an IP from range `10.0.0.0/24`.
+  The one physical fact a tenant can *read* is a machine's `placement` (`kind`, `cluster`, `node`),
+  so it can show users where a machine runs and tell hosts apart when diagnosing; nothing in the API
+  takes it as input, so it never becomes something a caller depends on to provision.
 
 This separation exists for two reasons:
 

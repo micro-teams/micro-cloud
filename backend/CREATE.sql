@@ -202,6 +202,7 @@ CREATE
     TABLE
         microcloud.machine(
             cores INTEGER NOT NULL,
+            data_disk_gb INTEGER,
             disk_gb INTEGER NOT NULL,
             memory_mb INTEGER NOT NULL,
             newapi_token_id INTEGER,
@@ -349,6 +350,7 @@ CREATE
         microcloud.machine_type(
             cores_max INTEGER NOT NULL,
             cores_min INTEGER NOT NULL,
+            data_disk_gb INTEGER,
             disk_gb_max INTEGER NOT NULL,
             disk_gb_min INTEGER NOT NULL,
             memory_mb_max INTEGER NOT NULL,

@@ -25,6 +25,7 @@ import app.microteams.microcloud.machine.offering.OfferingService
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.PlacementStatus
 import app.microteams.microcloud.machine.placement.effectiveKind
+import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.type.MachineType
 import app.microteams.microcloud.machine.zone.ZoneService
 import app.microteams.microcloud.model.*
@@ -40,7 +41,8 @@ import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 
-fun Machine.toDTO() =
+/** [placement] is where the machine runs (see [MachineService.placementOf]). */
+fun Machine.toDTO(placement: MachinePlacementDTO) =
     MachineDTO(
         id = this.id!!,
         customerId = this.customerId!!,
@@ -56,6 +58,8 @@ fun Machine.toDTO() =
         cores = this.cores!!,
         memoryMb = this.memoryMb!!,
         diskGb = this.diskGb!!,
+        dataDiskGb = this.dataDiskGb ?: 0,
+        placement = placement,
         ip = this.ip,
         aiMode = (this.aiMode ?: app.microteams.microcloud.machine.ai.AiMode.NONE).name.lowercase(),
         aiStatus =
@@ -100,6 +104,7 @@ class MachineService(
     private val offeringService: OfferingService,
     private val zoneService: ZoneService,
     private val placementService: PlacementService,
+    private val proxmoxService: ProxmoxService,
     private val networkService: NetworkService,
     private val templateUploadRepository:
         app.microteams.microcloud.machine.template.TemplateUploadRepository,
@@ -119,6 +124,22 @@ class MachineService(
                     "(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
             )
     }
+
+    /**
+     * Where [machine] runs, in provider-neutral fields: its placement's kind plus the cluster and
+     * node names (Proxmox is the only provider today, so these are the Proxmox cluster's name and
+     * the node).
+     */
+    fun placementOf(machine: Machine): MachinePlacementDTO {
+        val placement = placementService.getPlacement(machine.placementId!!)
+        return MachinePlacementDTO(
+            kind = placement.effectiveKind.wire,
+            cluster = proxmoxService.getCluster(placement.clusterId!!).name!!,
+            node = placement.node!!,
+        )
+    }
+
+    private fun Machine.toDTO(): MachineDTO = toDTO(placementOf(this))
 
     fun getMachine(tenantId: IdType, id: IdType): Machine {
         val machine = machineRepository.findById(id).orElseThrow { NotFoundError("machine", id) }
@@ -264,6 +285,7 @@ class MachineService(
                     cores = request.cores,
                     memoryMb = request.memoryMb,
                     diskGb = request.diskGb,
+                    dataDiskGb = type.dataDiskGb ?: 0,
                     placementId = placementId,
                     networkId = network,
                     loginUser = request.user,
