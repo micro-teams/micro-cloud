@@ -19,6 +19,8 @@ import javax.validation.Valid
  * @param memoryMbMax
  * @param diskGbMin
  * @param diskGbMax
+ * @param dataDiskGb data disk size in GB each machine gets beside its root disk; 0 = none (see
+ *   MachineType)
  * @param zoneId
  * @param zoneName
  * @param templateId
@@ -60,6 +62,14 @@ data class OfferingDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("diskGbMax", required = true)
     val diskGbMax: kotlin.Int,
+    @Schema(
+        example = "null",
+        required = true,
+        description =
+            "data disk size in GB each machine gets beside its root disk; 0 = none (see MachineType)",
+    )
+    @get:JsonProperty("dataDiskGb", required = true)
+    val dataDiskGb: kotlin.Int,
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("zoneId", required = true)
     val zoneId: kotlin.Long,

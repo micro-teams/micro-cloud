@@ -30,6 +30,7 @@ fun MachineType.toDTO() =
         memoryMbMax = this.memoryMbMax!!,
         diskGbMin = this.diskGbMin!!,
         diskGbMax = this.diskGbMax!!,
+        dataDiskGb = this.dataDiskGb ?: 0,
         status =
             when (this.status) {
                 MachineTypeStatus.ACTIVE -> MachineTypeStatusDTO.active
@@ -64,8 +65,13 @@ class MachineTypeService(
         if (min <= 0) throw BadRequestError("$label: min must be positive")
     }
 
+    private fun validateDataDisk(gb: Int) {
+        if (gb < 0) throw BadRequestError("dataDiskGb must not be negative")
+    }
+
     fun createType(request: CreateMachineTypeRequestDTO): MachineTypeDTO {
         validatePlacements(request.placementIds)
+        request.dataDiskGb?.let { validateDataDisk(it) }
         validateRange(request.coresMin, request.coresMax, "cores")
         validateRange(request.memoryMbMin, request.memoryMbMax, "memoryMb")
         validateRange(request.diskGbMin, request.diskGbMax, "diskGb")
@@ -81,6 +87,7 @@ class MachineTypeService(
                     memoryMbMax = request.memoryMbMax,
                     diskGbMin = request.diskGbMin,
                     diskGbMax = request.diskGbMax,
+                    dataDiskGb = request.dataDiskGb ?: 0,
                 )
             )
             .toDTO()
@@ -106,6 +113,10 @@ class MachineTypeService(
         request.memoryMbMax?.let { type.memoryMbMax = it }
         request.diskGbMin?.let { type.diskGbMin = it }
         request.diskGbMax?.let { type.diskGbMax = it }
+        request.dataDiskGb?.let {
+            validateDataDisk(it)
+            type.dataDiskGb = it
+        }
         validateRange(type.coresMin!!, type.coresMax!!, "cores")
         validateRange(type.memoryMbMin!!, type.memoryMbMax!!, "memoryMb")
         validateRange(type.diskGbMin!!, type.diskGbMax!!, "diskGb")

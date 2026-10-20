@@ -3,6 +3,7 @@ package app.microteams.microcloud.model
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
 import javax.validation.Valid
+import javax.validation.constraints.Min
 
 /**
  * a performance class; backed by one or more placements (super-admin detail)
@@ -15,6 +16,9 @@ import javax.validation.Valid
  * @param memoryMbMax
  * @param diskGbMin
  * @param diskGbMax
+ * @param dataDiskGb size of the empty data disk every machine of this type gets beside its root
+ *   disk, in GB; 0 = none. Attached to proxmox/vm machines only; proxmox/lxc machines get their
+ *   root disk alone.
  * @param status
  * @param description
  * @param placementIds placements that back this type (admin config)
@@ -45,6 +49,15 @@ data class MachineTypeDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("diskGbMax", required = true)
     val diskGbMax: kotlin.Int,
+    @get:Min(0)
+    @Schema(
+        example = "null",
+        required = true,
+        description =
+            "size of the empty data disk every machine of this type gets beside its root disk, in GB; 0 = none. Attached to proxmox/vm machines only; proxmox/lxc machines get their root disk alone.",
+    )
+    @get:JsonProperty("dataDiskGb", required = true)
+    val dataDiskGb: kotlin.Int,
     @field:Valid
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("status", required = true)

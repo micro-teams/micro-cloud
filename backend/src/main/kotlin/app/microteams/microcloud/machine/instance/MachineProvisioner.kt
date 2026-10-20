@@ -45,6 +45,7 @@ import app.microteams.microcloud.machine.network.NetworkService
 import app.microteams.microcloud.machine.placement.Placement
 import app.microteams.microcloud.machine.placement.PlacementService
 import app.microteams.microcloud.machine.placement.effectiveKind
+import app.microteams.microcloud.machine.proxmox.GuestIdAllocator
 import app.microteams.microcloud.machine.proxmox.GuestOwnership
 import app.microteams.microcloud.machine.proxmox.OperatorSsh
 import app.microteams.microcloud.machine.proxmox.ProxmoxClient
@@ -53,6 +54,7 @@ import app.microteams.microcloud.machine.proxmox.ProxmoxGuestLocked
 import app.microteams.microcloud.machine.proxmox.ProxmoxService
 import app.microteams.microcloud.machine.proxmox.ProxmoxTaskTimeout
 import app.microteams.microcloud.machine.proxmox.guestIsolationRules
+import app.microteams.microcloud.machine.proxmox.guestLockKey
 import app.microteams.microcloud.machine.proxmox.hostPortEndpoint
 import app.microteams.microcloud.machine.proxmox.relayEndpoint
 import app.microteams.microcloud.machine.template.MachineTemplateRepository
@@ -72,6 +74,7 @@ class MachineProvisioner(
     private val config: MicroCloudConfig,
     private val proxmoxClient: ProxmoxClient,
     private val proxmoxService: ProxmoxService,
+    private val guestIds: GuestIdAllocator,
     private val placementService: PlacementService,
     private val networkService: NetworkService,
     private val templateUploadRepository: TemplateUploadRepository,
@@ -417,8 +420,17 @@ class MachineProvisioner(
                 ?: throw IllegalStateException(
                     "LXC template upload ${upload.id} has no vztmpl volid"
                 )
-        val vmid = proxmoxClient.nextVmid(cluster)
-        lockGuest(cluster, vmid)
+        // Allocated under the guest lock, held until this provision commits.
+        val vmid = guestIds.allocate(cluster)
+        if ((machine.dataDiskGb ?: 0) > 0)
+            events.record(
+                machine,
+                PROVISION,
+                STARTED,
+                "dataDiskGb=${machine.dataDiskGb} is not supported on ${MachineKind.PROXMOX_LXC.wire}; " +
+                    "the container gets its root disk only",
+                WARN,
+            )
         val params = buildMap {
             put("vmid", vmid.toString())
             put("ostemplate", ostemplate)
@@ -487,8 +499,8 @@ class MachineProvisioner(
                 ?: throw IllegalStateException(
                     "VM template upload ${upload.id} has no baked template vmid"
                 )
-        val vmid = proxmoxClient.nextVmid(cluster)
-        lockGuest(cluster, vmid)
+        // Allocated under the guest lock, held until this provision commits.
+        val vmid = guestIds.allocate(cluster)
         val upid =
             proxmoxClient.cloneVm(
                 cluster,
@@ -499,7 +511,12 @@ class MachineProvisioner(
                     put("name", machine.hostname!!)
                     put("description", "microcloud-machine:${machine.id}")
                     put("pool", placement.pool!!)
-                    put("full", "1")
+                    // A linked clone: the new disk is a thin snapshot of the template's base
+                    // volume, so the clone takes ~3 s instead of the 20-24 s a full copy of the
+                    // disk took on pve119 (2026-10-20). The template stays referenced while any
+                    // clone lives; Proxmox refuses to destroy it until then, and a re-bake makes a
+                    // new template under a new vmid (TemplateUploader.bakeVm), never in place.
+                    put("full", "0")
                 },
             )
         awaitCreate(machine, cluster, node, vmid) {
@@ -517,6 +534,8 @@ class MachineProvisioner(
         val cloudInitKeys =
             listOfNotNull(machine.sshPubkey?.ifBlank { null }, operatorSsh.publicKey())
                 .joinToString("\n")
+        val rootDisk = proxmoxClient.vmConfigValue(cluster, node, vmid, "scsi0")
+        check(rootDisk.isNotBlank()) { "VM$vmid (clone of VM$templateVmid) has no scsi0" }
         proxmoxClient.setVmConfig(
             cluster,
             node,
@@ -528,6 +547,19 @@ class MachineProvisioner(
                 if (cloudInitKeys.isNotBlank())
                     put("sshkeys", proxmoxClient.sshkeysParam(cloudInitKeys))
                 put("ipconfig0", "ip=${machine.ip}/${network.prefixLength},gw=${network.gateway}")
+                // Proxmox defaults ciupgrade to 1, which made cloud-init upgrade every package on
+                // first boot: 52 packages, 77 s before the machine was usable (pve119,
+                // 2026-10-20). Machines are as fresh as their template; re-bake it to update.
+                put("ciupgrade", "0")
+                // Its own I/O thread per disk (scsihw is virtio-scsi-single): random writes went
+                // from 35k to 41k IOPS and p99 from 2.0 to 1.2 ms in the same measurement.
+                put("scsi0", vmDiskOptions(rootDisk, "discard=on", "iothread=1"))
+                machine.dataDiskGb
+                    ?.takeIf { it > 0 }
+                    ?.let { put("scsi1", "${placement.storage}:$it,discard=on,iothread=1") }
+                // The balloon device is left as the template has it, never `balloon: 0`: with it
+                // Proxmox 9 enables free-page reporting, which hands memory the guest frees back
+                // to the host.
             },
         )
         // Before the first boot, so the guest is never on the network unisolated.
@@ -864,7 +896,7 @@ class MachineProvisioner(
     private fun lockGuest(cluster: ProxmoxCluster, vmid: Int) {
         // Held through task completion and commit so creation cannot reuse an ID between
         // another worker's ownership check and destructive request.
-        machineRepository.advisoryLock("microcloud-guest:${cluster.id}:$vmid")
+        machineRepository.advisoryLock(guestLockKey(cluster, vmid))
     }
 
     /**
@@ -954,4 +986,17 @@ class MachineProvisioner(
         random.nextBytes(bytes)
         return "Mc" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
+}
+
+/**
+ * A Proxmox drive string ([drive], e.g. `local-lvm:vm-1-disk-0,discard=on,size=3G`) with each of
+ * [options] (`key=value`) set, replacing any value the drive already had for that key.
+ */
+internal fun vmDiskOptions(drive: String, vararg options: String): String {
+    val keys = options.map { it.substringBefore('=') }.toSet()
+    val parts = drive.split(',')
+    return (listOf(parts.first()) +
+            parts.drop(1).filterNot { it.substringBefore('=') in keys } +
+            options)
+        .joinToString(",")
 }

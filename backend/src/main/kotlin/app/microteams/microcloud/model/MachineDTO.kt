@@ -17,6 +17,8 @@ import javax.validation.Valid
  * @param cores
  * @param memoryMb
  * @param diskGb
+ * @param dataDiskGb size in GB of the data disk beside the root disk; 0 = none
+ * @param placement
  * @param status
  * @param aiMode how this machine's Claude Code gets model access: none | newapi | ccproxy
  * @param aiStatus AI setup state, independent of `status`: disabled | provisioning | ready | error
@@ -74,6 +76,17 @@ data class MachineDTO(
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("diskGb", required = true)
     val diskGb: kotlin.Int,
+    @Schema(
+        example = "null",
+        required = true,
+        description = "size in GB of the data disk beside the root disk; 0 = none",
+    )
+    @get:JsonProperty("dataDiskGb", required = true)
+    val dataDiskGb: kotlin.Int,
+    @field:Valid
+    @Schema(example = "null", required = true, description = "")
+    @get:JsonProperty("placement", required = true)
+    val placement: MachinePlacementDTO,
     @field:Valid
     @Schema(example = "null", required = true, description = "")
     @get:JsonProperty("status", required = true)

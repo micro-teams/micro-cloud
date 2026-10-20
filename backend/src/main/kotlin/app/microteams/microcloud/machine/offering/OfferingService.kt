@@ -121,6 +121,7 @@ class OfferingService(
             memoryMbMax = type.memoryMbMax!!,
             diskGbMin = type.diskGbMin!!,
             diskGbMax = type.diskGbMax!!,
+            dataDiskGb = type.dataDiskGb ?: 0,
             zoneId = zone.id!!,
             zoneName = zone.name!!,
             templateId = template.id!!,
