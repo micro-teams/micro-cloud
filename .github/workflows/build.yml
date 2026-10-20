@@ -51,7 +51,7 @@ jobs:
           fi
 
       - name: Upload jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           retention-days: 1
           name: jar
@@ -72,7 +72,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Upload dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           retention-days: 1
           name: frontend-dist
@@ -130,7 +130,7 @@ jobs:
       - name: Build the Debian 13 LXC template (the compile step for the template image)
         # Downloads the standard Proxmox Debian 13 LXC template and customizes it in a chroot.
         run: sudo python3 templates/lxc/debian13/build.py --output dist/debian13-microcloud.tar.zst
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           retention-days: 1
           name: lxc-template
@@ -179,7 +179,7 @@ jobs:
           chmod +x "$STAGE/gen-env.sh" "$STAGE/templates/lxc/debian13/init-machine.py" \
              "$STAGE/templates/vm/debian13/build.sh" "$STAGE/templates/vm/debian13/init-machine.py"
           echo "== bundle contents =="; find "$STAGE" -maxdepth 3 -type f | sort
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           retention-days: 1
           name: microcloud-deploy
