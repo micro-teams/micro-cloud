@@ -11,6 +11,10 @@ import app.microteams.microcloud.machine.instance.MachineRepository
 import app.microteams.microcloud.machine.instance.MachineService
 import app.microteams.microcloud.machine.instance.MachineStatus
 import app.microteams.microcloud.machine.offering.OfferingService
+import app.microteams.microcloud.machine.placement.Placement
+import app.microteams.microcloud.machine.placement.PlacementRepository
+import app.microteams.microcloud.machine.proxmox.ProxmoxCluster
+import app.microteams.microcloud.machine.proxmox.ProxmoxClusterRepository
 import app.microteams.microcloud.model.ClaimWarmMachineRequestDTO
 import app.microteams.microcloud.model.CreateMachineRequestDTO
 import com.ninjasquad.springmockk.MockkBean
@@ -32,7 +36,12 @@ import org.springframework.boot.test.context.SpringBootTest
 @SpringBootTest
 class MachineWarmClaimTest
 @Autowired
-constructor(private val service: MachineService, private val machines: MachineRepository) {
+constructor(
+    private val service: MachineService,
+    private val machines: MachineRepository,
+    private val clusters: ProxmoxClusterRepository,
+    private val placements: PlacementRepository,
+) {
     @MockkBean private lateinit var customers: CustomerService
     @MockkBean private lateinit var accounts: AccountService
     @MockkBean private lateinit var offerings: OfferingService
@@ -43,6 +52,31 @@ constructor(private val service: MachineService, private val machines: MachineRe
         every { accounts.getAccount(11, 33) } returns Account(tenantId = 11, customerId = 22)
         every { accounts.getAccount(11, 34) } returns Account(tenantId = 11, customerId = 99)
         every { offerings.getUsableForTenant(11, 1) } returns mockk(relaxed = true)
+    }
+
+    // A machine's DTO names its placement's cluster and node, so the placement must exist; the
+    // shared test database gives no placement a fixed id.
+    private val placementId: Long by lazy {
+        val cluster =
+            clusters.save(
+                ProxmoxCluster(
+                    name = "lab",
+                    apiUrl = "https://pve:8006",
+                    tokenId = "t",
+                    tokenSecret = "s",
+                )
+            )
+        placements
+            .save(
+                Placement(
+                    name = "warm-${System.nanoTime()}",
+                    clusterId = cluster.id,
+                    node = "pve",
+                    pool = "microcloud",
+                    storage = "local-lvm",
+                )
+            )
+            .id!!
     }
 
     private fun machine(warm: Boolean = true, ready: Boolean = true): Long =
@@ -56,7 +90,7 @@ constructor(private val service: MachineService, private val machines: MachineRe
                     offeringId = 1,
                     typeId = 1,
                     templateId = 1,
-                    placementId = 1,
+                    placementId = placementId,
                     networkId = 1,
                     loginUser = "dev",
                     cores = 1,
